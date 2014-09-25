@@ -889,6 +889,18 @@ terminate(Reason, _StateName, StateData) ->
     add_to_log(room_existence, stopped, StateData),
     mod_muc:room_destroyed(StateData#state.host, StateData#state.room, self(),
 			   StateData#state.server_host),
+    RoomConfig = StateData#state.config,
+    %% Save room configuration to Mnesia when FSM terminates.
+    case RoomConfig#config.hibernate
+        andalso RoomConfig#config.persistent of
+        true ->
+            mod_muc:store_room(StateData#state.server_host,
+                StateData#state.host,
+                StateData#state.room,
+                make_opts(StateData));
+            _ ->
+        ok
+    end,
     ok.
 
 %%%----------------------------------------------------------------------
@@ -1136,15 +1148,15 @@ process_presence(From, Nick,
     close_room_if_temporary_and_empty(StateData1).
 
 close_room_if_temporary_and_empty(StateData1) ->
-    case not (StateData1#state.config)#config.persistent
-	   andalso (?DICT):to_list(StateData1#state.users) == []
-	of
+    PersistConfig = (StateData1#state.config)#config.persistent,
+    HibernateConfig = (StateData1#state.config)#config.hibernate,
+    case (not PersistConfig or HibernateConfig)
+        andalso (?DICT):to_list(StateData1#state.users) == [] of
       true ->
-	  ?INFO_MSG("Destroyed MUC room ~s because it's temporary "
-		    "and empty",
-		    [jlib:jid_to_string(StateData1#state.jid)]),
-	  add_to_log(room_existence, destroyed, StateData1),
-	  {stop, normal, StateData1};
+	       ?INFO_MSG("Destroyed MUC room ~s because it's empty with config {persistent - %p, hibernate - %p},",
+	       [jlib:jid_to_string(StateData1#state.jid), PersistConfig, HibernateConfig]),
+	       add_to_log(room_existence, destroyed, StateData1),
+	       {stop, normal, StateData1};
       _ -> {next_state, normal_state, StateData1}
     end.
 
@@ -2143,6 +2155,9 @@ send_new_presence(NJID, Reason, StateData) ->
     SAffiliation = affiliation_to_list(Affiliation),
     SRole = role_to_list(Role),
     lists:foreach(fun ({_LJID, Info}) ->
+		case (StateData#state.config)#config.hide_participants andalso RealJID /= Info#user.jid of
+		true -> ok;
+		false ->
 			  ItemAttrs = case Info#user.role == moderator orelse
 					     (StateData#state.config)#config.anonymous
 					       == false
@@ -2212,63 +2227,68 @@ send_new_presence(NJID, Reason, StateData) ->
 			  ejabberd_router:route(jlib:jid_replace_resource(StateData#state.jid,
 								 Nick),
 				       Info#user.jid, Packet)
-		  end,
-		  (?DICT):to_list(StateData#state.users)).
+		  end
+		end,
+	(?DICT):to_list(StateData#state.users)).
 
 send_existing_presences(ToJID, StateData) ->
-    LToJID = jlib:jid_tolower(ToJID),
-    {ok, #user{jid = RealToJID, role = Role}} =
-	(?DICT):find(LToJID, StateData#state.users),
-    lists:foreach(fun ({FromNick, _Users}) ->
-			  LJID = find_jid_by_nick(FromNick, StateData),
-			  #user{jid = FromJID, role = FromRole,
-				last_presence = Presence} =
-			      (?DICT):fetch(jlib:jid_tolower(LJID),
-					    StateData#state.users),
-			  case RealToJID of
-			    FromJID -> ok;
-			    _ ->
-				FromAffiliation = get_affiliation(LJID,
-								  StateData),
-				ItemAttrs = case Role == moderator orelse
-						   (StateData#state.config)#config.anonymous
-						     == false
-						of
-					      true ->
-						  [{<<"jid">>,
-						    jlib:jid_to_string(FromJID)},
-						   {<<"affiliation">>,
-						    affiliation_to_list(FromAffiliation)},
-						   {<<"role">>,
-						    role_to_list(FromRole)}];
-					      _ ->
-						  [{<<"affiliation">>,
-						    affiliation_to_list(FromAffiliation)},
-						   {<<"role">>,
-						    role_to_list(FromRole)}]
-					    end,
-				Packet = xml:append_subtags(Presence,
-							    [#xmlel{name =
-									<<"x">>,
-								    attrs =
-									[{<<"xmlns">>,
-									  ?NS_MUC_USER}],
-								    children =
-									[#xmlel{name
-										    =
-										    <<"item">>,
-										attrs
-										    =
-										    ItemAttrs,
-										children
-										    =
-										    []}]}]),
-				ejabberd_router:route(jlib:jid_replace_resource(StateData#state.jid,
-								       FromNick),
-					     RealToJID, Packet)
-			  end
-		  end,
-		  (?DICT):to_list(StateData#state.nicks)).
+	case (StateData#state.config)#config.hide_participants of
+	true -> ok;
+	false ->
+		LToJID = jlib:jid_tolower(ToJID),
+		{ok, #user{jid = RealToJID, role = Role}} =
+		(?DICT):find(LToJID, StateData#state.users),
+		lists:foreach(fun ({FromNick, _Users}) ->
+				  LJID = find_jid_by_nick(FromNick, StateData),
+				  #user{jid = FromJID, role = FromRole,
+					last_presence = Presence} =
+					  (?DICT):fetch(jlib:jid_tolower(LJID),
+							StateData#state.users),
+				  case RealToJID of
+					FromJID -> ok;
+					_ ->
+					FromAffiliation = get_affiliation(LJID,
+									  StateData),
+					ItemAttrs = case Role == moderator orelse
+							   (StateData#state.config)#config.anonymous
+								 == false
+							of
+							  true ->
+							  [{<<"jid">>,
+								jlib:jid_to_string(FromJID)},
+							   {<<"affiliation">>,
+								affiliation_to_list(FromAffiliation)},
+							   {<<"role">>,
+								role_to_list(FromRole)}];
+							  _ ->
+							  [{<<"affiliation">>,
+								affiliation_to_list(FromAffiliation)},
+							   {<<"role">>,
+								role_to_list(FromRole)}]
+							end,
+					Packet = xml:append_subtags(Presence,
+									[#xmlel{name =
+										<<"x">>,
+										attrs =
+										[{<<"xmlns">>,
+										  ?NS_MUC_USER}],
+										children =
+										[#xmlel{name
+												=
+												<<"item">>,
+											attrs
+												=
+												ItemAttrs,
+											children
+												=
+												[]}]}]),
+					ejabberd_router:route(jlib:jid_replace_resource(StateData#state.jid,
+										   FromNick),
+							 RealToJID, Packet)
+				  end
+			  end,
+			  (?DICT):to_list(StateData#state.nicks))
+	end.
 
 now_to_usec({MSec, Sec, USec}) ->
     (MSec * 1000000 + Sec) * 1000000 + USec.
@@ -3364,7 +3384,10 @@ get_config(Lang, StateData, From) ->
 	      allow ->
 		  [?BOOLXFIELD(<<"Make room persistent">>,
 			       <<"muc#roomconfig_persistentroom">>,
-			       (Config#config.persistent))];
+			       (Config#config.persistent)),
+           ?BOOLXFIELD(<<"Allow persistent rooms to hibernate">>,
+                   <<"muc#roomconfig_hibernateroom">>,
+                   (Config#config.hibernate))];
 	      _ -> []
 	    end
 	      ++
@@ -3535,6 +3558,9 @@ get_config(Lang, StateData, From) ->
 	       ?BOOLXFIELD(<<"Allow visitors to change nickname">>,
 			   <<"muc#roomconfig_allowvisitornickchange">>,
 			   (Config#config.allow_visitor_nickchange)),
+	       ?BOOLXFIELD(<<"Hide participants in the room">>,
+			   <<"muc#roomconfig_hideparticipants">>,
+			   (Config#config.hide_participants)),
 	       ?BOOLXFIELD(<<"Allow visitors to send voice requests">>,
 			   <<"muc#roomconfig_allowvoicerequests">>,
 			   (Config#config.allow_voice_requests)),
@@ -3683,6 +3709,8 @@ set_xoption([{<<"muc#roomconfig_allowvisitornickchange">>,
 	     | Opts],
 	    Config) ->
     ?SET_BOOL_XOPT(allow_visitor_nickchange, Val);
+set_xoption([{<<"muc#roomconfig_hideparticipants">>, [Val]} | Opts], Config) ->
+    ?SET_BOOL_XOPT(hide_participants, Val);
 set_xoption([{<<"muc#roomconfig_publicroom">>, [Val]}
 	     | Opts],
 	    Config) ->
@@ -3695,6 +3723,11 @@ set_xoption([{<<"muc#roomconfig_persistentroom">>,
 	     | Opts],
 	    Config) ->
     ?SET_BOOL_XOPT(persistent, Val);
+set_xoption([{<<"muc#roomconfig_hibernateroom">>,
+           [Val]}
+         | Opts],
+        Config) ->
+    ?SET_BOOL_XOPT(hibernate, Val);
 set_xoption([{<<"muc#roomconfig_moderatedroom">>, [Val]}
 	     | Opts],
 	    Config) ->
@@ -3850,6 +3883,10 @@ set_opts([{Opt, Val} | Opts], StateData) ->
 		StateData#state{config =
 				    (StateData#state.config)#config{persistent =
 									Val}};
+        hibernate ->
+        StateData#state{config =
+                    (StateData#state.config)#config{hibernate =
+                                    Val}};
 	    moderated ->
 		StateData#state{config =
 				    (StateData#state.config)#config{moderated =
@@ -3881,6 +3918,10 @@ set_opts([{Opt, Val} | Opts], StateData) ->
 	    anonymous ->
 		StateData#state{config =
 				    (StateData#state.config)#config{anonymous =
+									Val}};
+	    hide_participants ->
+		StateData#state{config =
+				    (StateData#state.config)#config{hide_participants =
 									Val}};
 	    logging ->
 		StateData#state{config =
@@ -3933,6 +3974,7 @@ make_opts(StateData) ->
      ?MAKE_CONFIG_OPT(allow_visitor_nickchange),
      ?MAKE_CONFIG_OPT(public), ?MAKE_CONFIG_OPT(public_list),
      ?MAKE_CONFIG_OPT(persistent),
+     ?MAKE_CONFIG_OPT(hibernate),
      ?MAKE_CONFIG_OPT(moderated),
      ?MAKE_CONFIG_OPT(members_by_default),
      ?MAKE_CONFIG_OPT(members_only),
@@ -3940,6 +3982,7 @@ make_opts(StateData) ->
      ?MAKE_CONFIG_OPT(password_protected),
      ?MAKE_CONFIG_OPT(captcha_protected),
      ?MAKE_CONFIG_OPT(password), ?MAKE_CONFIG_OPT(anonymous),
+     ?MAKE_CONFIG_OPT(hide_participants),
      ?MAKE_CONFIG_OPT(logging), ?MAKE_CONFIG_OPT(max_users),
      ?MAKE_CONFIG_OPT(allow_voice_requests),
      ?MAKE_CONFIG_OPT(voice_request_min_interval),
