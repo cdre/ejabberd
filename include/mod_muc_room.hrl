@@ -46,6 +46,7 @@
     public                               = true :: boolean(),
     public_list                          = true :: boolean(),
     persistent                           = false :: boolean(),
+    persistent_history                   = false :: boolean(),
     hibernate                            = true :: boolean(),
     moderated                            = true :: boolean(),
     captcha_protected                    = false :: boolean(),

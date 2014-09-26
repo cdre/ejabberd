@@ -31,9 +31,9 @@
 
 %% External exports
 -export([start_link/9,
-	 start_link/7,
+	 start_link/8,
 	 start/9,
-	 start/7,
+	 start/8,
 	 route/4]).
 
 %% gen_fsm callbacks
@@ -88,11 +88,11 @@ start(Host, ServerHost, Access, Room, HistorySize, RoomShaper,
       Creator, Nick, DefRoomOpts) ->
     ?SUPERVISOR_START.
 
-start(Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts) ->
+start(Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, History) ->
     Supervisor = gen_mod:get_module_proc(ServerHost, ejabberd_mod_muc_sup),
     supervisor:start_child(
       Supervisor, [Host, ServerHost, Access, Room, HistorySize, RoomShaper,
-		   Opts]).
+		   Opts, History]).
 
 start_link(Host, ServerHost, Access, Room, HistorySize, RoomShaper,
 	   Creator, Nick, DefRoomOpts) ->
@@ -100,9 +100,9 @@ start_link(Host, ServerHost, Access, Room, HistorySize, RoomShaper,
 				 RoomShaper, Creator, Nick, DefRoomOpts],
 		       ?FSMOPTS).
 
-start_link(Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts) ->
+start_link(Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, History) ->
     gen_fsm:start_link(?MODULE, [Host, ServerHost, Access, Room, HistorySize,
-				 RoomShaper, Opts],
+				 RoomShaper, Opts, History],
 		       ?FSMOPTS).
 
 %%%----------------------------------------------------------------------
@@ -131,7 +131,8 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Creator, _Nick, D
 	   mod_muc:store_room(State1#state.server_host,
 			      State1#state.host,
 			      State1#state.room,
-			      make_opts(State1));
+			      make_opts(State1),
+   			      lqueue_to_list(State1#state.history));
        true -> ok
     end,
     ?INFO_MSG("Created MUC room ~s@~s by ~s", 
@@ -139,14 +140,14 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Creator, _Nick, D
     add_to_log(room_existence, created, State1),
     add_to_log(room_existence, started, State1),
     {ok, normal_state, State1};
-init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts]) ->
+init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, History]) ->
     process_flag(trap_exit, true),
     Shaper = shaper:new(RoomShaper),
     State = set_opts(Opts, #state{host = Host,
 				  server_host = ServerHost,
 				  access = Access,
 				  room = Room,
-				  history = lqueue_new(HistorySize),
+				  history = lqueue_from_list(History, HistorySize),
 				  jid = jlib:make_jid(Room, Host, <<"">>),
 				  room_shaper = Shaper}),
     add_to_log(room_existence, started, State),
@@ -292,7 +293,8 @@ normal_state({route, From, <<"">>,
 					       mod_muc:store_room(NSD#state.server_host,
 								  NSD#state.host,
 								  NSD#state.room,
-								  make_opts(NSD));
+								  make_opts(NSD),
+								  lqueue_to_list(NSD#state.history));
 					   _ -> ok
 					 end,
 					 {next_state, normal_state, NSD};
@@ -897,7 +899,8 @@ terminate(Reason, _StateName, StateData) ->
             mod_muc:store_room(StateData#state.server_host,
                 StateData#state.host,
                 StateData#state.room,
-                make_opts(StateData));
+                make_opts(StateData),
+                lqueue_to_list(StateData#state.history));
             _ ->
         ok
     end,
@@ -945,7 +948,8 @@ process_groupchat_message(From,
 								mod_muc:store_room(NSD#state.server_host,
 										   NSD#state.host,
 										   NSD#state.room,
-										   make_opts(NSD));
+										   make_opts(NSD),
+										   lqueue_to_list(NSD#state.history));
 							    _ -> ok
 							  end,
 							  {NSD, true};
@@ -1147,18 +1151,32 @@ process_presence(From, Nick,
 		 end,
     close_room_if_temporary_and_empty(StateData1).
 
+
 close_room_if_temporary_and_empty(StateData1) ->
     PersistConfig = (StateData1#state.config)#config.persistent,
     HibernateConfig = (StateData1#state.config)#config.hibernate,
     case (not PersistConfig or HibernateConfig)
         andalso (?DICT):to_list(StateData1#state.users) == [] of
       true ->
-	       ?INFO_MSG("Destroyed MUC room ~s because it's empty with config {persistent - %p, hibernate - %p},",
+	       ?INFO_MSG("Destroyed MUC room ~s because it's empty with config {persistent - ~p, hibernate - ~p},",
 	       [jlib:jid_to_string(StateData1#state.jid), PersistConfig, HibernateConfig]),
+	       store_room_history_if_persistent_history(StateData1),
 	       add_to_log(room_existence, destroyed, StateData1),
 	       {stop, normal, StateData1};
       _ -> {next_state, normal_state, StateData1}
     end.
+
+store_room_history_if_persistent_history(StateData1) ->
+	case (StateData1#state.config)#config.persistent_history andalso 
+			(StateData1#state.config)#config.persistent of
+		true ->
+			mod_muc:store_room(StateData1#state.server_host,
+			  				   StateData1#state.host, StateData1#state.room,
+			   				   make_opts(StateData1),
+							   lqueue_to_list(StateData1#state.history));
+		_ ->
+			ok
+	end.
 
 is_user_online(JID, StateData) ->
     LJID = jlib:jid_tolower(JID),
@@ -2449,6 +2467,11 @@ lqueue_cut(Q, N) ->
 lqueue_to_list(#lqueue{queue = Q1}) ->
     queue:to_list(Q1).
 
+lqueue_from_list(HistoryL, Max) ->
+	HistoryQ = queue:from_list(HistoryL),
+	#lqueue{queue = HistoryQ,
+			len = queue:len(HistoryQ),
+			max = Max}.
 
 add_message_to_history(FromNick, FromJID, Packet, StateData) ->
     HaveSubject = case xml:get_subtag(Packet, <<"subject">>)
@@ -2746,7 +2769,8 @@ process_admin_items_set(UJID, Items, Lang, StateData) ->
 	    true ->
 		mod_muc:store_room(NSD#state.server_host,
 				   NSD#state.host, NSD#state.room,
-				   make_opts(NSD));
+				   make_opts(NSD),
+				   lqueue_to_list(NSD#state.history));
 	    _ -> ok
 	  end,
 	  {result, [], NSD};
@@ -3385,6 +3409,9 @@ get_config(Lang, StateData, From) ->
 		  [?BOOLXFIELD(<<"Make room persistent">>,
 			       <<"muc#roomconfig_persistentroom">>,
 			       (Config#config.persistent)),
+		   ?BOOLXFIELD(<<"Persist room history to DB">>,
+		   		   <<"muc#roomconfig_persistenthistory">>,
+		   		   (Config#config.persistent_history)),
            ?BOOLXFIELD(<<"Allow persistent rooms to hibernate">>,
                    <<"muc#roomconfig_hibernateroom">>,
                    (Config#config.hibernate))];
@@ -3723,6 +3750,11 @@ set_xoption([{<<"muc#roomconfig_persistentroom">>,
 	     | Opts],
 	    Config) ->
     ?SET_BOOL_XOPT(persistent, Val);
+set_xoption([{<<"muc#roomconfig_persistenthistory">>,
+	      [Val]}
+	     | Opts],
+	    Config) ->
+    ?SET_BOOL_XOPT(persistent_history, Val);
 set_xoption([{<<"muc#roomconfig_hibernateroom">>,
            [Val]}
          | Opts],
@@ -3809,7 +3841,8 @@ change_config(Config, StateData) ->
 	of
       {_, true} ->
 	  mod_muc:store_room(NSD#state.server_host,
-			     NSD#state.host, NSD#state.room, make_opts(NSD));
+			     NSD#state.host, NSD#state.room,
+			     make_opts(NSD), lqueue_to_list(NSD#state.history));
       {true, false} ->
 	  mod_muc:forget_room(NSD#state.server_host,
 			      NSD#state.host, NSD#state.room);
@@ -3882,6 +3915,10 @@ set_opts([{Opt, Val} | Opts], StateData) ->
 	    persistent ->
 		StateData#state{config =
 				    (StateData#state.config)#config{persistent =
+									Val}};
+		persistent_history ->
+		StateData#state{config =
+					(StateData#state.config)#config{persistent_history =
 									Val}};
         hibernate ->
         StateData#state{config =
@@ -3974,6 +4011,7 @@ make_opts(StateData) ->
      ?MAKE_CONFIG_OPT(allow_visitor_nickchange),
      ?MAKE_CONFIG_OPT(public), ?MAKE_CONFIG_OPT(public_list),
      ?MAKE_CONFIG_OPT(persistent),
+     ?MAKE_CONFIG_OPT(persistent_history),
      ?MAKE_CONFIG_OPT(hibernate),
      ?MAKE_CONFIG_OPT(moderated),
      ?MAKE_CONFIG_OPT(members_by_default),
