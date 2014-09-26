@@ -340,13 +340,19 @@ init([Host, Opts]) ->
     HistorySize = gen_mod:get_opt(history_size, Opts, fun(A) -> A end, 20),
     DefRoomOpts = gen_mod:get_opt(default_room_options, Opts, fun(A) -> A end, []),
     RoomShaper = gen_mod:get_opt(room_shaper, Opts, fun(A) -> A end, none),
+    LoadPermanentRooms = gen_mod:get_opt(load_persistent_rooms, Opts, fun(A) -> A end, true),
     ejabberd_router:register_route(MyHost),
     % Don't load a large number of unnecessary permanent rooms
-    % TODO: Make this a configurable option.
-    % load_permanent_rooms(MyHost, Host,
-			 % {Access, AccessCreate, AccessAdmin, AccessPersistent},
-			 % HistorySize,
-			 % RoomShaper),
+    case LoadPermanentRooms of
+        true ->
+            ?INFO_MSG("Restoring persistent MUCs on ~p", [MyHost]),
+            load_permanent_rooms(MyHost, Host,
+	                               {Access, AccessCreate,
+                                    AccessAdmin, AccessPersistent},
+	                               HistorySize,
+                                   RoomShaper);
+        _ -> ok
+    end,
     {ok, #state{host = MyHost,
 		server_host = Host,
 		access = {Access, AccessCreate, AccessAdmin, AccessPersistent},
