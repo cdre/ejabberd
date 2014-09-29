@@ -5,7 +5,7 @@
 %%% Created : 11 Mar 2003 by Alexey Shchepin <alexey@sevcom.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2014   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2013   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -17,9 +17,10 @@
 %%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 %%% General Public License for more details.
 %%%
-%%% You should have received a copy of the GNU General Public License along
-%%% with this program; if not, write to the Free Software Foundation, Inc.,
-%%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+%%% You should have received a copy of the GNU General Public License
+%%% along with this program; if not, write to the Free Software
+%%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+%%% 02111-1307 USA
 %%%
 %%%----------------------------------------------------------------------
 
@@ -80,9 +81,7 @@ mech_step(#state{step = 3, nonce = Nonce} = State,
       bad -> {error, <<"bad-protocol">>};
       KeyVals ->
 	  DigestURI = proplists:get_value(<<"digest-uri">>, KeyVals, <<>>),
-	  %DigestURI = xml:get_attr_s(<<"digest-uri">>, KeyVals),
 	  UserName = proplists:get_value(<<"username">>, KeyVals, <<>>),
-	  %UserName = xml:get_attr_s(<<"username">>, KeyVals),
 	  case is_digesturi_valid(DigestURI, State#state.host,
 				  State#state.hostfqdn)
 	      of
@@ -93,14 +92,35 @@ mech_step(#state{step = 3, nonce = Nonce} = State,
 		       [DigestURI, State#state.host, State#state.hostfqdn]),
 		{error, <<"not-authorized">>, UserName};
 	    true ->
-		AuthzId = proplists:get_value(<<"authzid">>, KeyVals, <<>>),
-		%AuthzId = xml:get_attr_s(<<"authzid">>, KeyVals),
+		AuthzId = proplists_get_bin_value(<<"authzid">>, KeyVals, <<>>),
+		Realm = proplists_get_bin_value(<<"realm">>, KeyVals, <<>>),
+
 		case (State#state.get_password)(UserName) of
-		  {false, _} -> {error, <<"not-authorized">>, UserName};
+		  {false, AuthModule} ->
+			  AuthModuleMethods = apply(AuthModule, module_info, [exports]),
+			  case lists:any(fun({Name, _Arity}) -> Name == get_user_realm_password_hash end, AuthModuleMethods) of
+				true ->
+					case apply(AuthModule, get_user_realm_password_hash, [UserName, State#state.host, Realm]) of
+						false -> {error, <<"not-authorized">>, UserName};
+						PasswordHash ->
+							OurDigest = response_via_hash(KeyVals, hex_to_bin(binary_to_list(PasswordHash)), Nonce, AuthzId, <<"AUTHENTICATE">>),
+							UsersDigest = proplists:get_value(<<"response">>, KeyVals, <<>>),
+							case (OurDigest == UsersDigest) of
+								true ->
+									RspAuth = response_via_hash(KeyVals, hex_to_bin(binary_to_list(PasswordHash)), Nonce, AuthzId, <<"">>),
+									{continue, <<"rspauth=", RspAuth/binary>>,
+									 State#state{step = 5, auth_module = AuthModule,
+										 username = UserName,
+										 authzid = AuthzId}};
+								false -> {error, <<"not-authorized">>, UserName}
+							end
+					end;
+				false ->
+				  {error, <<"not-authorized">>, UserName}
+		      end;
 		  {Passwd, AuthModule} ->
 		      case (State#state.check_password)(UserName, <<"">>,
 		                    proplists:get_value(<<"response">>, KeyVals, <<>>),
-							%xml:get_attr_s(<<"response">>, KeyVals),
 							fun (PW) ->
 								response(KeyVals,
 									 UserName,
@@ -229,20 +249,22 @@ proplists_get_bin_value(Key, Pairs, Default) ->
             L2
     end.
 
-response(KeyVals, User, Passwd, Nonce, AuthzId,
-	 A2Prefix) ->
+response(KeyVals, User, Passwd, Nonce, AuthzId, A2Prefix) ->
     Realm = proplists_get_bin_value(<<"realm">>, KeyVals, <<>>),
+    MD5Hash = erlang:md5(<<User/binary, ":", Realm/binary, ":", Passwd/binary>>),
+	response_via_hash(KeyVals, MD5Hash, Nonce, AuthzId, A2Prefix).
+
+response_via_hash(KeyVals, UserRealmPasswordHash, Nonce, AuthzId, A2Prefix) ->
     CNonce = proplists_get_bin_value(<<"cnonce">>, KeyVals, <<>>),
     DigestURI = proplists_get_bin_value(<<"digest-uri">>, KeyVals, <<>>),
     NC = proplists_get_bin_value(<<"nc">>, KeyVals, <<>>),
     QOP = proplists_get_bin_value(<<"qop">>, KeyVals, <<>>),
-    MD5Hash = erlang:md5(<<User/binary, ":", Realm/binary, ":",
-                           Passwd/binary>>),
+
     A1 = case AuthzId of
 	   <<"">> ->
-	       <<MD5Hash/binary, ":", Nonce/binary, ":", CNonce/binary>>;
+	       <<UserRealmPasswordHash/binary, ":", Nonce/binary, ":", CNonce/binary>>;
 	   _ ->
-	       <<MD5Hash/binary, ":", Nonce/binary, ":", CNonce/binary, ":",
+	       <<UserRealmPasswordHash/binary, ":", Nonce/binary, ":", CNonce/binary, ":",
 		 AuthzId/binary>>
 	 end,
     A2 = case QOP of
@@ -256,3 +278,5 @@ response(KeyVals, User, Passwd, Nonce, AuthzId,
 	  ":", NC/binary, ":", CNonce/binary, ":", QOP/binary,
 	  ":", (hex((erlang:md5(A2))))/binary>>,
     hex((erlang:md5(T))).
+
+hex_to_bin(Str) -> << << (erlang:list_to_integer([H], 16)):4 >> || H <- Str >>.
