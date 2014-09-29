@@ -34,3 +34,14 @@
 /src/ejabberd.app.src
 /src/eldap_filter_yecc.erl
 /vars.config
+
+# Rumble Specific Modules
+src/ejabberd_auth_rumble.erl
+src/mochiglobal.erl
+src/mochijson2.erl
+src/mod_muc_rumble_api.erl
+src/mod_rumble_configuration.erl
+src/mod_rumble_profanity.erl
+src/mod_rumble_roster.erl
+src/mod_rumble_send_presence.erl
+src/mod_rumble_statistics.erl
