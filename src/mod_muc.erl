@@ -36,7 +36,7 @@
 	 start/2,
 	 stop/1,
 	 room_destroyed/4,
-	 store_room/4,
+	 store_room/5,
 	 restore_room/3,
 	 forget_room/3,
 	 create_room/5,
@@ -69,6 +69,11 @@
 -record(muc_registered,
         {us_host = {{<<"">>, <<"">>}, <<"">>} :: {{binary(), binary()}, binary()} | '$1',
          nick = <<"">> :: binary()}).
+
+-record(muc_history,
+        {name_host = {<<"">>, <<"">>} :: {binary(), binary()} |
+                                          {'_', binary()},
+         history = [] :: list() | '_'}).
 
 -record(state,
 	{host = <<"">> :: binary(),
@@ -136,22 +141,34 @@ create_room(Host, Name, From, Nick, Opts) ->
     Proc = gen_mod:get_module_proc(Host, ?PROCNAME),
     gen_server:call(Proc, {create, Name, From, Nick, Opts}).
 
-store_room(ServerHost, Host, Name, Opts) ->
+store_room(ServerHost, Host, Name, Opts, History) ->
     LServer = jlib:nameprep(ServerHost),
-    store_room(LServer, Host, Name, Opts,
+    store_room(LServer, Host, Name, Opts, History,
 	       gen_mod:db_type(LServer, ?MODULE)).
 
-store_room(_LServer, Host, Name, Opts, mnesia) ->
+store_room(_LServer, Host, Name, Opts, History, mnesia) ->
     F = fun () ->
 		mnesia:write(#muc_room{name_host = {Name, Host},
-				       opts = Opts})
+				       opts = Opts}),
+        case proplists:get_value(persistent_history, Opts) of
+                true ->
+                    mnesia:write(#muc_history{name_host = {Name, Host},
+                                              history = History}),
+                    ?INFO_MSG("Saving MUC history - [{~p, ~p}, {persistent_history, ~p}]",
+                            [Name, Host, true]);
+                Option ->
+                    ?INFO_MSG("Not saving MUC history - [{~p, ~p}, {persistent_history, ~p}]",
+                            [Name, Host, Option])
+        end
 	end,
     mnesia:transaction(F);
-store_room(_LServer, Host, Name, Opts, riak) ->
+%% TODO: Implement history saving to riak
+store_room(_LServer, Host, Name, Opts, _History, riak) ->
     {atomic, ejabberd_riak:put(#muc_room{name_host = {Name, Host},
                                          opts = Opts},
 			       muc_room_schema())};
-store_room(LServer, Host, Name, Opts, odbc) ->
+%% TODO: Implement history saving to odbc
+store_room(LServer, Host, Name, Opts, _History, odbc) ->
     SName = ejabberd_odbc:escape(Name),
     SHost = ejabberd_odbc:escape(Host),
     SOpts = ejabberd_odbc:encode_term(Opts),
@@ -170,15 +187,22 @@ restore_room(ServerHost, Host, Name) ->
                  gen_mod:db_type(LServer, ?MODULE)).
 
 restore_room(_LServer, Host, Name, mnesia) ->
-    case catch mnesia:dirty_read(muc_room, {Name, Host}) of
-      [#muc_room{opts = Opts}] -> Opts;
-      _ -> error
-    end;
+    Opts1 = case catch mnesia:dirty_read(muc_room, {Name, Host}) of
+        [#muc_room{opts = Opts}] -> Opts;
+        _ -> error
+    end,
+    History1 = case catch mnesia:dirty_read(muc_history, {Name, Host}) of
+        [#muc_history{history = History}] -> History;
+        _ -> []
+    end,
+    {Opts1, History1};
+%% TODO: Add support for persistent history from riak
 restore_room(_LServer, Host, Name, riak) ->
     case ejabberd_riak:get(muc_room, muc_room_schema(), {Name, Host}) of
         {ok, #muc_room{opts = Opts}} -> Opts;
         _ -> error
     end;
+%% TODO: Add support for persistent history from odbc
 restore_room(LServer, Host, Name, odbc) ->
     SName = ejabberd_odbc:escape(Name),
     SHost = ejabberd_odbc:escape(Host),
@@ -293,6 +317,10 @@ init([Host, Opts]) ->
                                 [{disc_copies, [node()]},
                                  {attributes,
                                   record_info(fields, muc_registered)}]),
+            mnesia:create_table(muc_history,
+                                [{disc_copies, [node()]},
+                                 {attributes,
+                                  record_info(fields, muc_history)}]),
             update_tables(MyHost),
             mnesia:add_table_index(muc_registered, nick);
         _ ->
@@ -312,11 +340,19 @@ init([Host, Opts]) ->
     HistorySize = gen_mod:get_opt(history_size, Opts, fun(A) -> A end, 20),
     DefRoomOpts = gen_mod:get_opt(default_room_options, Opts, fun(A) -> A end, []),
     RoomShaper = gen_mod:get_opt(room_shaper, Opts, fun(A) -> A end, none),
+    LoadPermanentRooms = gen_mod:get_opt(load_persistent_rooms, Opts, fun(A) -> A end, true),
     ejabberd_router:register_route(MyHost),
-    load_permanent_rooms(MyHost, Host,
-			 {Access, AccessCreate, AccessAdmin, AccessPersistent},
-			 HistorySize,
-			 RoomShaper),
+    % Don't load a large number of unnecessary permanent rooms
+    case LoadPermanentRooms of
+        true ->
+            ?INFO_MSG("Restoring persistent MUCs on ~p", [MyHost]),
+            load_permanent_rooms(MyHost, Host,
+	                               {Access, AccessCreate,
+                                    AccessAdmin, AccessPersistent},
+	                               HistorySize,
+                                   RoomShaper);
+        _ -> ok
+    end,
     {ok, #state{host = MyHost,
 		server_host = Host,
 		access = {Access, AccessCreate, AccessAdmin, AccessPersistent},
@@ -673,6 +709,10 @@ load_permanent_rooms(Host, ServerHost, Access, HistorySize, RoomShaper) ->
               {Room, Host} = R#muc_room.name_host,
               case mnesia:dirty_read(muc_online_room, {Room, Host}) of
                   [] ->
+                      History1 = case catch mnesia:dirty_read(muc_history, {Room, Host}) of
+                                    [#muc_history{history = History}] -> History;
+                                    _ -> []
+                                 end,
                       {ok, Pid} = mod_muc_room:start(
                                     Host,
                                     ServerHost,
@@ -680,7 +720,8 @@ load_permanent_rooms(Host, ServerHost, Access, HistorySize, RoomShaper) ->
                                     Room,
                                     HistorySize,
                                     RoomShaper,
-                                    R#muc_room.opts),
+                                    R#muc_room.opts,
+                                    History1),
                       register_room(Host, Room, Pid);
                   _ ->
                       ok
@@ -691,17 +732,17 @@ start_new_room(Host, ServerHost, Access, Room,
 	       HistorySize, RoomShaper, From,
 	       Nick, DefRoomOpts) ->
     case restore_room(ServerHost, Host, Room) of
-        error ->
+        {error, _} ->
 	    ?DEBUG("MUC: open new room '~s'~n", [Room]),
 	    mod_muc_room:start(Host, ServerHost, Access,
 			       Room, HistorySize,
 			       RoomShaper, From,
 			       Nick, DefRoomOpts);
-        Opts ->
+        {Opts, History} ->
 	    ?DEBUG("MUC: restore room '~s'~n", [Room]),
 	    mod_muc_room:start(Host, ServerHost, Access,
 			       Room, HistorySize,
-			       RoomShaper, Opts)
+			       RoomShaper, Opts, History)
     end.
 
 register_room(Host, Room, Pid) ->

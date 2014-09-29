@@ -46,6 +46,8 @@
     public                               = true :: boolean(),
     public_list                          = true :: boolean(),
     persistent                           = false :: boolean(),
+    persistent_history                   = false :: boolean(),
+    hibernate                            = true :: boolean(),
     moderated                            = true :: boolean(),
     captcha_protected                    = false :: boolean(),
     members_by_default                   = true :: boolean(),
@@ -59,7 +61,8 @@
     max_users                            = ?MAX_USERS_DEFAULT :: non_neg_integer() | none,
     logging                              = false :: boolean(),
     vcard                                = <<"">> :: boolean(),
-    captcha_whitelist                    = (?SETS):empty() :: gb_set()
+    captcha_whitelist                    = (?SETS):empty() :: gb_set(),
+	hide_participants					 = false :: boolean()
 }).
 
 -type config() :: #config{}.

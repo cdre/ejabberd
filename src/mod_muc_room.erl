@@ -31,9 +31,9 @@
 
 %% External exports
 -export([start_link/9,
-	 start_link/7,
+	 start_link/8,
 	 start/9,
-	 start/7,
+	 start/8,
 	 route/4]).
 
 %% gen_fsm callbacks
@@ -88,11 +88,11 @@ start(Host, ServerHost, Access, Room, HistorySize, RoomShaper,
       Creator, Nick, DefRoomOpts) ->
     ?SUPERVISOR_START.
 
-start(Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts) ->
+start(Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, History) ->
     Supervisor = gen_mod:get_module_proc(ServerHost, ejabberd_mod_muc_sup),
     supervisor:start_child(
       Supervisor, [Host, ServerHost, Access, Room, HistorySize, RoomShaper,
-		   Opts]).
+		   Opts, History]).
 
 start_link(Host, ServerHost, Access, Room, HistorySize, RoomShaper,
 	   Creator, Nick, DefRoomOpts) ->
@@ -100,9 +100,9 @@ start_link(Host, ServerHost, Access, Room, HistorySize, RoomShaper,
 				 RoomShaper, Creator, Nick, DefRoomOpts],
 		       ?FSMOPTS).
 
-start_link(Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts) ->
+start_link(Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, History) ->
     gen_fsm:start_link(?MODULE, [Host, ServerHost, Access, Room, HistorySize,
-				 RoomShaper, Opts],
+				 RoomShaper, Opts, History],
 		       ?FSMOPTS).
 
 %%%----------------------------------------------------------------------
@@ -131,7 +131,8 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Creator, _Nick, D
 	   mod_muc:store_room(State1#state.server_host,
 			      State1#state.host,
 			      State1#state.room,
-			      make_opts(State1));
+			      make_opts(State1),
+   			      lqueue_to_list(State1#state.history));
        true -> ok
     end,
     ?INFO_MSG("Created MUC room ~s@~s by ~s", 
@@ -139,14 +140,14 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Creator, _Nick, D
     add_to_log(room_existence, created, State1),
     add_to_log(room_existence, started, State1),
     {ok, normal_state, State1};
-init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts]) ->
+init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, History]) ->
     process_flag(trap_exit, true),
     Shaper = shaper:new(RoomShaper),
     State = set_opts(Opts, #state{host = Host,
 				  server_host = ServerHost,
 				  access = Access,
 				  room = Room,
-				  history = lqueue_new(HistorySize),
+				  history = lqueue_from_list(History, HistorySize),
 				  jid = jlib:make_jid(Room, Host, <<"">>),
 				  room_shaper = Shaper}),
     add_to_log(room_existence, started, State),
@@ -292,7 +293,8 @@ normal_state({route, From, <<"">>,
 					       mod_muc:store_room(NSD#state.server_host,
 								  NSD#state.host,
 								  NSD#state.room,
-								  make_opts(NSD));
+								  make_opts(NSD),
+								  lqueue_to_list(NSD#state.history));
 					   _ -> ok
 					 end,
 					 {next_state, normal_state, NSD};
@@ -889,6 +891,19 @@ terminate(Reason, _StateName, StateData) ->
     add_to_log(room_existence, stopped, StateData),
     mod_muc:room_destroyed(StateData#state.host, StateData#state.room, self(),
 			   StateData#state.server_host),
+    RoomConfig = StateData#state.config,
+    %% Save room configuration to Mnesia when FSM terminates.
+    case RoomConfig#config.hibernate
+        andalso RoomConfig#config.persistent of
+        true ->
+            mod_muc:store_room(StateData#state.server_host,
+                StateData#state.host,
+                StateData#state.room,
+                make_opts(StateData),
+                lqueue_to_list(StateData#state.history));
+            _ ->
+        ok
+    end,
     ok.
 
 %%%----------------------------------------------------------------------
@@ -933,7 +948,8 @@ process_groupchat_message(From,
 								mod_muc:store_room(NSD#state.server_host,
 										   NSD#state.host,
 										   NSD#state.room,
-										   make_opts(NSD));
+										   make_opts(NSD),
+										   lqueue_to_list(NSD#state.history));
 							    _ -> ok
 							  end,
 							  {NSD, true};
@@ -1135,18 +1151,32 @@ process_presence(From, Nick,
 		 end,
     close_room_if_temporary_and_empty(StateData1).
 
+
 close_room_if_temporary_and_empty(StateData1) ->
-    case not (StateData1#state.config)#config.persistent
-	   andalso (?DICT):to_list(StateData1#state.users) == []
-	of
+    PersistConfig = (StateData1#state.config)#config.persistent,
+    HibernateConfig = (StateData1#state.config)#config.hibernate,
+    case (not PersistConfig or HibernateConfig)
+        andalso (?DICT):to_list(StateData1#state.users) == [] of
       true ->
-	  ?INFO_MSG("Destroyed MUC room ~s because it's temporary "
-		    "and empty",
-		    [jlib:jid_to_string(StateData1#state.jid)]),
-	  add_to_log(room_existence, destroyed, StateData1),
-	  {stop, normal, StateData1};
+	       ?INFO_MSG("Destroyed MUC room ~s because it's empty with config {persistent - ~p, hibernate - ~p},",
+	       [jlib:jid_to_string(StateData1#state.jid), PersistConfig, HibernateConfig]),
+	       store_room_history_if_persistent_history(StateData1),
+	       add_to_log(room_existence, destroyed, StateData1),
+	       {stop, normal, StateData1};
       _ -> {next_state, normal_state, StateData1}
     end.
+
+store_room_history_if_persistent_history(StateData1) ->
+	case (StateData1#state.config)#config.persistent_history andalso 
+			(StateData1#state.config)#config.persistent of
+		true ->
+			mod_muc:store_room(StateData1#state.server_host,
+			  				   StateData1#state.host, StateData1#state.room,
+			   				   make_opts(StateData1),
+							   lqueue_to_list(StateData1#state.history));
+		_ ->
+			ok
+	end.
 
 is_user_online(JID, StateData) ->
     LJID = jlib:jid_tolower(JID),
@@ -2143,6 +2173,9 @@ send_new_presence(NJID, Reason, StateData) ->
     SAffiliation = affiliation_to_list(Affiliation),
     SRole = role_to_list(Role),
     lists:foreach(fun ({_LJID, Info}) ->
+		case (StateData#state.config)#config.hide_participants andalso RealJID /= Info#user.jid of
+		true -> ok;
+		false ->
 			  ItemAttrs = case Info#user.role == moderator orelse
 					     (StateData#state.config)#config.anonymous
 					       == false
@@ -2212,63 +2245,68 @@ send_new_presence(NJID, Reason, StateData) ->
 			  ejabberd_router:route(jlib:jid_replace_resource(StateData#state.jid,
 								 Nick),
 				       Info#user.jid, Packet)
-		  end,
-		  (?DICT):to_list(StateData#state.users)).
+		  end
+		end,
+	(?DICT):to_list(StateData#state.users)).
 
 send_existing_presences(ToJID, StateData) ->
-    LToJID = jlib:jid_tolower(ToJID),
-    {ok, #user{jid = RealToJID, role = Role}} =
-	(?DICT):find(LToJID, StateData#state.users),
-    lists:foreach(fun ({FromNick, _Users}) ->
-			  LJID = find_jid_by_nick(FromNick, StateData),
-			  #user{jid = FromJID, role = FromRole,
-				last_presence = Presence} =
-			      (?DICT):fetch(jlib:jid_tolower(LJID),
-					    StateData#state.users),
-			  case RealToJID of
-			    FromJID -> ok;
-			    _ ->
-				FromAffiliation = get_affiliation(LJID,
-								  StateData),
-				ItemAttrs = case Role == moderator orelse
-						   (StateData#state.config)#config.anonymous
-						     == false
-						of
-					      true ->
-						  [{<<"jid">>,
-						    jlib:jid_to_string(FromJID)},
-						   {<<"affiliation">>,
-						    affiliation_to_list(FromAffiliation)},
-						   {<<"role">>,
-						    role_to_list(FromRole)}];
-					      _ ->
-						  [{<<"affiliation">>,
-						    affiliation_to_list(FromAffiliation)},
-						   {<<"role">>,
-						    role_to_list(FromRole)}]
-					    end,
-				Packet = xml:append_subtags(Presence,
-							    [#xmlel{name =
-									<<"x">>,
-								    attrs =
-									[{<<"xmlns">>,
-									  ?NS_MUC_USER}],
-								    children =
-									[#xmlel{name
-										    =
-										    <<"item">>,
-										attrs
-										    =
-										    ItemAttrs,
-										children
-										    =
-										    []}]}]),
-				ejabberd_router:route(jlib:jid_replace_resource(StateData#state.jid,
-								       FromNick),
-					     RealToJID, Packet)
-			  end
-		  end,
-		  (?DICT):to_list(StateData#state.nicks)).
+	case (StateData#state.config)#config.hide_participants of
+	true -> ok;
+	false ->
+		LToJID = jlib:jid_tolower(ToJID),
+		{ok, #user{jid = RealToJID, role = Role}} =
+		(?DICT):find(LToJID, StateData#state.users),
+		lists:foreach(fun ({FromNick, _Users}) ->
+				  LJID = find_jid_by_nick(FromNick, StateData),
+				  #user{jid = FromJID, role = FromRole,
+					last_presence = Presence} =
+					  (?DICT):fetch(jlib:jid_tolower(LJID),
+							StateData#state.users),
+				  case RealToJID of
+					FromJID -> ok;
+					_ ->
+					FromAffiliation = get_affiliation(LJID,
+									  StateData),
+					ItemAttrs = case Role == moderator orelse
+							   (StateData#state.config)#config.anonymous
+								 == false
+							of
+							  true ->
+							  [{<<"jid">>,
+								jlib:jid_to_string(FromJID)},
+							   {<<"affiliation">>,
+								affiliation_to_list(FromAffiliation)},
+							   {<<"role">>,
+								role_to_list(FromRole)}];
+							  _ ->
+							  [{<<"affiliation">>,
+								affiliation_to_list(FromAffiliation)},
+							   {<<"role">>,
+								role_to_list(FromRole)}]
+							end,
+					Packet = xml:append_subtags(Presence,
+									[#xmlel{name =
+										<<"x">>,
+										attrs =
+										[{<<"xmlns">>,
+										  ?NS_MUC_USER}],
+										children =
+										[#xmlel{name
+												=
+												<<"item">>,
+											attrs
+												=
+												ItemAttrs,
+											children
+												=
+												[]}]}]),
+					ejabberd_router:route(jlib:jid_replace_resource(StateData#state.jid,
+										   FromNick),
+							 RealToJID, Packet)
+				  end
+			  end,
+			  (?DICT):to_list(StateData#state.nicks))
+	end.
 
 now_to_usec({MSec, Sec, USec}) ->
     (MSec * 1000000 + Sec) * 1000000 + USec.
@@ -2429,6 +2467,11 @@ lqueue_cut(Q, N) ->
 lqueue_to_list(#lqueue{queue = Q1}) ->
     queue:to_list(Q1).
 
+lqueue_from_list(HistoryL, Max) ->
+	HistoryQ = queue:from_list(HistoryL),
+	#lqueue{queue = HistoryQ,
+			len = queue:len(HistoryQ),
+			max = Max}.
 
 add_message_to_history(FromNick, FromJID, Packet, StateData) ->
     HaveSubject = case xml:get_subtag(Packet, <<"subject">>)
@@ -2726,7 +2769,8 @@ process_admin_items_set(UJID, Items, Lang, StateData) ->
 	    true ->
 		mod_muc:store_room(NSD#state.server_host,
 				   NSD#state.host, NSD#state.room,
-				   make_opts(NSD));
+				   make_opts(NSD),
+				   lqueue_to_list(NSD#state.history));
 	    _ -> ok
 	  end,
 	  {result, [], NSD};
@@ -3364,7 +3408,13 @@ get_config(Lang, StateData, From) ->
 	      allow ->
 		  [?BOOLXFIELD(<<"Make room persistent">>,
 			       <<"muc#roomconfig_persistentroom">>,
-			       (Config#config.persistent))];
+			       (Config#config.persistent)),
+		   ?BOOLXFIELD(<<"Persist room history to DB">>,
+		   		   <<"muc#roomconfig_persistenthistory">>,
+		   		   (Config#config.persistent_history)),
+           ?BOOLXFIELD(<<"Allow persistent rooms to hibernate">>,
+                   <<"muc#roomconfig_hibernateroom">>,
+                   (Config#config.hibernate))];
 	      _ -> []
 	    end
 	      ++
@@ -3535,6 +3585,9 @@ get_config(Lang, StateData, From) ->
 	       ?BOOLXFIELD(<<"Allow visitors to change nickname">>,
 			   <<"muc#roomconfig_allowvisitornickchange">>,
 			   (Config#config.allow_visitor_nickchange)),
+	       ?BOOLXFIELD(<<"Hide participants in the room">>,
+			   <<"muc#roomconfig_hideparticipants">>,
+			   (Config#config.hide_participants)),
 	       ?BOOLXFIELD(<<"Allow visitors to send voice requests">>,
 			   <<"muc#roomconfig_allowvoicerequests">>,
 			   (Config#config.allow_voice_requests)),
@@ -3683,6 +3736,8 @@ set_xoption([{<<"muc#roomconfig_allowvisitornickchange">>,
 	     | Opts],
 	    Config) ->
     ?SET_BOOL_XOPT(allow_visitor_nickchange, Val);
+set_xoption([{<<"muc#roomconfig_hideparticipants">>, [Val]} | Opts], Config) ->
+    ?SET_BOOL_XOPT(hide_participants, Val);
 set_xoption([{<<"muc#roomconfig_publicroom">>, [Val]}
 	     | Opts],
 	    Config) ->
@@ -3695,6 +3750,16 @@ set_xoption([{<<"muc#roomconfig_persistentroom">>,
 	     | Opts],
 	    Config) ->
     ?SET_BOOL_XOPT(persistent, Val);
+set_xoption([{<<"muc#roomconfig_persistenthistory">>,
+	      [Val]}
+	     | Opts],
+	    Config) ->
+    ?SET_BOOL_XOPT(persistent_history, Val);
+set_xoption([{<<"muc#roomconfig_hibernateroom">>,
+           [Val]}
+         | Opts],
+        Config) ->
+    ?SET_BOOL_XOPT(hibernate, Val);
 set_xoption([{<<"muc#roomconfig_moderatedroom">>, [Val]}
 	     | Opts],
 	    Config) ->
@@ -3776,7 +3841,8 @@ change_config(Config, StateData) ->
 	of
       {_, true} ->
 	  mod_muc:store_room(NSD#state.server_host,
-			     NSD#state.host, NSD#state.room, make_opts(NSD));
+			     NSD#state.host, NSD#state.room,
+			     make_opts(NSD), lqueue_to_list(NSD#state.history));
       {true, false} ->
 	  mod_muc:forget_room(NSD#state.server_host,
 			      NSD#state.host, NSD#state.room);
@@ -3850,6 +3916,14 @@ set_opts([{Opt, Val} | Opts], StateData) ->
 		StateData#state{config =
 				    (StateData#state.config)#config{persistent =
 									Val}};
+		persistent_history ->
+		StateData#state{config =
+					(StateData#state.config)#config{persistent_history =
+									Val}};
+        hibernate ->
+        StateData#state{config =
+                    (StateData#state.config)#config{hibernate =
+                                    Val}};
 	    moderated ->
 		StateData#state{config =
 				    (StateData#state.config)#config{moderated =
@@ -3881,6 +3955,10 @@ set_opts([{Opt, Val} | Opts], StateData) ->
 	    anonymous ->
 		StateData#state{config =
 				    (StateData#state.config)#config{anonymous =
+									Val}};
+	    hide_participants ->
+		StateData#state{config =
+				    (StateData#state.config)#config{hide_participants =
 									Val}};
 	    logging ->
 		StateData#state{config =
@@ -3933,6 +4011,8 @@ make_opts(StateData) ->
      ?MAKE_CONFIG_OPT(allow_visitor_nickchange),
      ?MAKE_CONFIG_OPT(public), ?MAKE_CONFIG_OPT(public_list),
      ?MAKE_CONFIG_OPT(persistent),
+     ?MAKE_CONFIG_OPT(persistent_history),
+     ?MAKE_CONFIG_OPT(hibernate),
      ?MAKE_CONFIG_OPT(moderated),
      ?MAKE_CONFIG_OPT(members_by_default),
      ?MAKE_CONFIG_OPT(members_only),
@@ -3940,6 +4020,7 @@ make_opts(StateData) ->
      ?MAKE_CONFIG_OPT(password_protected),
      ?MAKE_CONFIG_OPT(captcha_protected),
      ?MAKE_CONFIG_OPT(password), ?MAKE_CONFIG_OPT(anonymous),
+     ?MAKE_CONFIG_OPT(hide_participants),
      ?MAKE_CONFIG_OPT(logging), ?MAKE_CONFIG_OPT(max_users),
      ?MAKE_CONFIG_OPT(allow_voice_requests),
      ?MAKE_CONFIG_OPT(voice_request_min_interval),
