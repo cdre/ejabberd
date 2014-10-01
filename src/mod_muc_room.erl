@@ -139,6 +139,7 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Creator, _Nick, D
 	      [Room, Host, jlib:jid_to_string(Creator)]),
     add_to_log(room_existence, created, State1),
     add_to_log(room_existence, started, State1),
+    ejabberd_hooks:run(muc_create, ServerHost, [ServerHost, Host]),
     {ok, normal_state, State1};
 init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, History]) ->
     process_flag(trap_exit, true),
@@ -151,6 +152,7 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Opts, History]) -
 				  jid = jlib:make_jid(Room, Host, <<"">>),
 				  room_shaper = Shaper}),
     add_to_log(room_existence, started, State),
+    ejabberd_hooks:run(muc_create, ServerHost, [ServerHost, Host]),
     {ok, normal_state, State}.
 
 %%----------------------------------------------------------------------
@@ -904,6 +906,7 @@ terminate(Reason, _StateName, StateData) ->
             _ ->
         ok
     end,
+    ejabberd_hooks:run(muc_destroy, StateData#state.server_host, [StateData#state.server_host, StateData#state.host]),
     ok.
 
 %%%----------------------------------------------------------------------

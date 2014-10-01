@@ -153,10 +153,14 @@ check_password_with_authmodule(User, Server, Password,
     check_password_loop(auth_modules(Server),
 			[User, Server, Password, Digest, DigestGen]).
 
-check_password_loop([], _Args) -> false;
-check_password_loop([AuthModule | AuthModules], Args) ->
+check_password_loop([], [User, Server, Password, _Digest, _DigestGen]) -> 
+    ejabberd_hooks:run(auth_failure, Server, [User, Server, Password]),
+    false;
+check_password_loop([AuthModule | AuthModules], Args = [User, Server, Password, _Digest, _DigestGen]) ->
     case apply(AuthModule, check_password, Args) of
-      true -> {true, AuthModule};
+      true ->
+          ejabberd_hooks:run(auth_success, Server, [User, Server, Password]),
+          {true, AuthModule};
       false -> check_password_loop(AuthModules, Args)
     end.
 

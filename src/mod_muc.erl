@@ -342,6 +342,7 @@ init([Host, Opts]) ->
     RoomShaper = gen_mod:get_opt(room_shaper, Opts, fun(A) -> A end, none),
     LoadPermanentRooms = gen_mod:get_opt(load_persistent_rooms, Opts, fun(A) -> A end, true),
     ejabberd_router:register_route(MyHost),
+    ejabberd_hooks:run(muc_init, Host, [Host, MyHost, 0]),
     % Don't load a large number of unnecessary permanent rooms
     case LoadPermanentRooms of
         true ->
