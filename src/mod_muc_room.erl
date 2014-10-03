@@ -132,7 +132,8 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Creator, _Nick, D
 			      State1#state.host,
 			      State1#state.room,
 			      make_opts(State1),
-   			      lqueue_to_list(State1#state.history));
+   	          lqueue_to_list(State1#state.history)),
+	   ejabberd_hooks:run(muc_config_create, ServerHost, [ServerHost, Host]);
        true -> ok
     end,
     ?INFO_MSG("Created MUC room ~s@~s by ~s", 
@@ -3845,7 +3846,11 @@ change_config(Config, StateData) ->
       {_, true} ->
 	  mod_muc:store_room(NSD#state.server_host,
 			     NSD#state.host, NSD#state.room,
-			     make_opts(NSD), lqueue_to_list(NSD#state.history));
+			     make_opts(NSD), lqueue_to_list(NSD#state.history)),
+	  ejabberd_hooks:run(muc_config_create,
+    					 NSD#state.server_host,
+      					 [NSD#state.server_host,
+      					  NSD#state.host]);
       {true, false} ->
 	  mod_muc:forget_room(NSD#state.server_host,
 			      NSD#state.host, NSD#state.room);

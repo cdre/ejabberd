@@ -219,7 +219,8 @@ restore_room(LServer, Host, Name, odbc) ->
 forget_room(ServerHost, Host, Name) ->
     LServer = jlib:nameprep(ServerHost),
     forget_room(LServer, Host, Name,
-		gen_mod:db_type(LServer, ?MODULE)).
+		gen_mod:db_type(LServer, ?MODULE)),
+    ejabberd_hooks:run(muc_config_destroy, ServerHost, [ServerHost, Host]).
 
 forget_room(_LServer, Host, Name, mnesia) ->
     F = fun () -> mnesia:delete({muc_room, {Name, Host}})
@@ -343,6 +344,8 @@ init([Host, Opts]) ->
     LoadPermanentRooms = gen_mod:get_opt(load_persistent_rooms, Opts, fun(A) -> A end, true),
     ejabberd_router:register_route(MyHost),
     ejabberd_hooks:run(muc_init, Host, [Host, MyHost, 0]),
+    RoomConfigs = length(mnesia:dirty_all_keys(muc_room)),
+    ejabberd_hooks:run(muc_config_init, Host, [Host, MyHost, RoomConfigs]),
     % Don't load a large number of unnecessary permanent rooms
     case LoadPermanentRooms of
         true ->
