@@ -75,6 +75,14 @@
                                           {'_', binary()},
          history = [] :: list() | '_'}).
 
+-record(muc_counter,
+        {host = <<"">> :: binary(),
+        count = 0 :: integer()}).
+
+-record(muc_config_counter,
+        {host = <<"">> :: binary(),
+        count = 0 :: integer()}).
+
 -record(state,
 	{host = <<"">> :: binary(),
          server_host = <<"">> :: binary(),
@@ -223,9 +231,11 @@ forget_room(ServerHost, Host, Name) ->
     ejabberd_hooks:run(muc_config_destroy, ServerHost, [ServerHost, Host]).
 
 forget_room(_LServer, Host, Name, mnesia) ->
-    F = fun () -> mnesia:delete({muc_room, {Name, Host}})
+    F = fun () ->
+            mnesia:delete({muc_room, {Name, Host}})
 	end,
-    mnesia:transaction(F);
+    mnesia:transaction(F),
+    mnesia:dirty_update_counter(muc_config_counter, Host, -1);
 forget_room(_LServer, Host, Name, riak) ->
     {atomic, ejabberd_riak:delete(muc_room, {Name, Host})};
 forget_room(LServer, Host, Name, odbc) ->
@@ -322,6 +332,15 @@ init([Host, Opts]) ->
                                 [{disc_copies, [node()]},
                                  {attributes,
                                   record_info(fields, muc_history)}]),
+            mnesia:create_table(muc_counter,
+                                [{ram_copies, [node()]},
+                                 {attributes,
+                                  record_info(fields, muc_counter)}]),
+            mnesia:create_table(muc_config_counter,
+                                [{ram_copies, [node()]},
+                                 {attributes,
+                                  record_info(fields, muc_config_counter)}]),
+
             update_tables(MyHost),
             mnesia:add_table_index(muc_registered, nick);
         _ ->
@@ -331,8 +350,11 @@ init([Host, Opts]) ->
 			[{ram_copies, [node()]},
 			 {attributes, record_info(fields, muc_online_room)}]),
     mnesia:add_table_copy(muc_online_room, node(), ram_copies),
+    mnesia:add_table_copy(muc_counter, node(), ram_copies),
+    mnesia:add_table_copy(muc_config_counter, node(), ram_copies),
     catch ets:new(muc_online_users, [bag, named_table, public, {keypos, 2}]),
     clean_table_from_bad_node(node(), MyHost),
+    ejabberd_hooks:run(muc_update_count, Host, [Host, MyHost]),
     mnesia:subscribe(system),
     Access = gen_mod:get_opt(access, Opts, fun(A) -> A end, all),
     AccessCreate = gen_mod:get_opt(access_create, Opts, fun(A) -> A end, all),
@@ -343,9 +365,8 @@ init([Host, Opts]) ->
     RoomShaper = gen_mod:get_opt(room_shaper, Opts, fun(A) -> A end, none),
     LoadPermanentRooms = gen_mod:get_opt(load_persistent_rooms, Opts, fun(A) -> A end, true),
     ejabberd_router:register_route(MyHost),
-    ejabberd_hooks:run(muc_init, Host, [Host, MyHost, 0]),
-    RoomConfigs = length(mnesia:dirty_all_keys(muc_room)),
-    ejabberd_hooks:run(muc_config_init, Host, [Host, MyHost, RoomConfigs]),
+    recount_muc_configs(MyHost),
+    ejabberd_hooks:run(muc_update_config_count, Host, [Host, MyHost]),
     % Don't load a large number of unnecessary permanent rooms
     case LoadPermanentRooms of
         true ->
@@ -390,7 +411,7 @@ handle_call({create, Room, From, Nick, Opts}, _From,
 		  Room, HistorySize,
 		  RoomShaper, From,
 		  Nick, NewOpts),
-    register_room(Host, Room, Pid),
+    register_room(Host, Room, Pid, ServerHost),
     {reply, ok, State}.
 
 %%--------------------------------------------------------------------
@@ -427,9 +448,13 @@ handle_info({room_destroyed, RoomHost, Pid}, State) ->
 						      pid = Pid})
 	end,
     mnesia:transaction(F),
+    {_, Host} = RoomHost,
+    mnesia:dirty_update_counter(muc_counter, Host, -1),
+    ejabberd_hooks:run(muc_update_count, State#state.server_host, [State#state.server_host, Host]),
     {noreply, State};
 handle_info({mnesia_system_event, {mnesia_down, Node}}, State) ->
     clean_table_from_bad_node(Node),
+    ejabberd_hooks:run(muc_update_count, State#state.server_host, [State#state.server_host, State#state.host]),
     {noreply, State};
 handle_info(_Info, State) -> {noreply, State}.
 
@@ -629,7 +654,7 @@ do_route1(Host, ServerHost, Access, HistorySize, RoomShaper,
 						  Room, HistorySize,
 						  RoomShaper, From,
 						  Nick, DefRoomOpts),
-				    register_room(Host, Room, Pid),
+				    register_room(Host, Room, Pid, ServerHost),
 				    mod_muc_room:route(Pid, From, Nick, Packet),
 				    ok;
 				false ->
@@ -726,7 +751,7 @@ load_permanent_rooms(Host, ServerHost, Access, HistorySize, RoomShaper) ->
                                     RoomShaper,
                                     R#muc_room.opts,
                                     History1),
-                      register_room(Host, Room, Pid);
+                      register_room(Host, Room, Pid, ServerHost);
                   _ ->
                       ok
               end
@@ -749,13 +774,23 @@ start_new_room(Host, ServerHost, Access, Room,
 			       RoomShaper, Opts, History)
     end.
 
+register_room(Host, Room, Pid, ServerHost) ->
+    register_room(Host, Room, Pid),
+    ejabberd_hooks:run(muc_update_count, ServerHost, [ServerHost, Host]).
+
 register_room(Host, Room, Pid) ->
     F = fun() ->
 		mnesia:write(#muc_online_room{name_host = {Room, Host},
-					      pid = Pid})
+					      pid = Pid}),
+        mnesia:dirty_update_counter(muc_counter, Host, 1)
 	end,
     mnesia:transaction(F).
 
+recount_muc_configs(Host) ->
+    RoomConfigs = mnesia:dirty_select(muc_room, [{#muc_room{name_host = {'_', '$1'}, _ = '_'}, 
+                                                 [{'==', '$1', Host}],
+                                                 ['$_']}]),
+    mnesia:dirty_update_counter(muc_config_counter, Host, length(RoomConfigs)).
 
 iq_disco_info(Lang) ->
     [#xmlel{name = <<"identity">>,
@@ -1163,7 +1198,9 @@ clean_table_from_bad_node(Node) ->
 			 [{'==', {node, '$1'}, Node}],
 			 ['$_']}]),
 		lists:foreach(fun(E) ->
-				      mnesia:delete_object(E)
+				      mnesia:delete_object(E),
+                      {_, MucHost} = E#muc_online_room.name_host, 
+                      mnesia:dirty_update_counter(muc_counter, MucHost, -1)
 			      end, Es)
         end,
     mnesia:async_dirty(F).
@@ -1178,7 +1215,9 @@ clean_table_from_bad_node(Node, Host) ->
 			 [{'==', {node, '$1'}, Node}],
 			 ['$_']}]),
 		lists:foreach(fun(E) ->
-				      mnesia:delete_object(E)
+				      mnesia:delete_object(E),
+                      {_, MucHost} = E#muc_online_room.name_host, 
+                      mnesia:dirty_update_counter(muc_counter, MucHost, -1)
 			      end, Es)
         end,
     mnesia:async_dirty(F).

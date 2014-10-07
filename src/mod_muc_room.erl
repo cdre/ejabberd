@@ -133,6 +133,7 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Creator, _Nick, D
 			      State1#state.room,
 			      make_opts(State1),
    	          lqueue_to_list(State1#state.history)),
+	   mnesia:dirty_update_counter(muc_config_counter, Host, 1),
 	   ejabberd_hooks:run(muc_config_create, ServerHost, [ServerHost, Host]);
        true -> ok
     end,
@@ -3843,10 +3844,11 @@ change_config(Config, StateData) ->
     case {(StateData#state.config)#config.persistent,
 	  Config#config.persistent}
 	of
-      {_, true} ->
+      {false, true} ->
 	  mod_muc:store_room(NSD#state.server_host,
 			     NSD#state.host, NSD#state.room,
 			     make_opts(NSD), lqueue_to_list(NSD#state.history)),
+	  mnesia:dirty_update_counter(muc_config_counter, NSD#state.host, 1),
 	  ejabberd_hooks:run(muc_config_create,
     					 NSD#state.server_host,
       					 [NSD#state.server_host,
@@ -3854,7 +3856,8 @@ change_config(Config, StateData) ->
       {true, false} ->
 	  mod_muc:forget_room(NSD#state.server_host,
 			      NSD#state.host, NSD#state.room);
-      {false, false} -> ok
+      {false, false} -> ok;
+      {true, true} -> ok
     end,
     case {(StateData#state.config)#config.members_only,
 	  Config#config.members_only}
