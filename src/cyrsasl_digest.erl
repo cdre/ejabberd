@@ -97,6 +97,8 @@ mech_step(#state{step = 3, nonce = Nonce} = State,
 
 		case (State#state.get_password)(UserName) of
 		  {false, AuthModule} ->
+			  {error, <<"not-authorized">>, UserName};
+		  {_Passwd, AuthModule} when AuthModule == ejabberd_auth_rumble ->
 			  AuthModuleMethods = apply(AuthModule, module_info, [exports]),
 			  case lists:any(fun({Name, _Arity}) -> Name == get_user_realm_password_hash end, AuthModuleMethods) of
 				true ->
