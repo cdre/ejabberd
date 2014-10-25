@@ -329,7 +329,7 @@ init([Host, Opts]) ->
                                  {attributes,
                                   record_info(fields, muc_registered)}]),
             mnesia:create_table(muc_history,
-                                [{disc_copies, [node()]},
+                                [{disk_only_copies, [node()]},
                                  {attributes,
                                   record_info(fields, muc_history)}]),
             mnesia:create_table(muc_counter,
