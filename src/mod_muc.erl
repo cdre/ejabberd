@@ -321,7 +321,7 @@ init([Host, Opts]) ->
     case gen_mod:db_type(Opts) of
         mnesia ->
             mnesia:create_table(muc_room,
-                                [{disc_copies, [node()]},
+                                [{disc_only_copies, [node()]},
                                  {attributes,
                                   record_info(fields, muc_room)}]),
             mnesia:create_table(muc_registered,
