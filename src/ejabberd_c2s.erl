@@ -651,7 +651,7 @@ wait_for_auth({xmlstreamelement, El}, StateData) ->
 			    ejabberd_hooks:run_fold(roster_get_subscription_lists,
 						    StateData#state.server,
 						    {[], []},
-						    [U,
+						    [JID,
 							StateData#state.server]),
 			LJID =
 			    jlib:jid_tolower(jlib:jid_remove_resource(JID)),
@@ -1129,7 +1129,7 @@ wait_for_session({xmlstreamelement, El}, StateData) ->
 				 roster_get_subscription_lists,
 				 NewState#state.server,
 				 {[], []},
-				 [U, NewState#state.server]),
+				 [JID, NewState#state.server]),
 		    LJID = jlib:jid_tolower(jlib:jid_remove_resource(JID)),
 		    Fs1 = [LJID | Fs],
 		    Ts1 = [LJID | Ts],
