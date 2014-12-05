@@ -261,7 +261,7 @@ write_roster_version(LUser, LServer, _InTransaction, Ver,
 process_iq_get(From, To, #iq{sub_el = SubEl} = IQ) ->
     LUser = From#jid.luser,
     LServer = From#jid.lserver,
-    US = {LUser, LServer},
+    JS = {From, LServer},
     try {ItemsToSend, VersionToSend} = case
 					 {xml:get_tag_attr(<<"ver">>, SubEl),
 					  roster_versioning_enabled(LServer),
@@ -280,7 +280,7 @@ process_iq_get(From, To, #iq{sub_el = SubEl} = IQ) ->
 							      ejabberd_hooks:run_fold(roster_get,
 										      To#jid.lserver,
 										      [],
-										      [US])),
+										      [JS])),
 						    RosterVersion};
 					       RequestedVersion ->
 						   {false, false};
@@ -289,7 +289,7 @@ process_iq_get(From, To, #iq{sub_el = SubEl} = IQ) ->
 							      ejabberd_hooks:run_fold(roster_get,
 										      To#jid.lserver,
 										      [],
-										      [US])),
+										      [JS])),
 						    NewVersion}
 					     end;
 					 {{value, RequestedVersion}, true,
@@ -298,7 +298,7 @@ process_iq_get(From, To, #iq{sub_el = SubEl} = IQ) ->
 						 ejabberd_hooks:run_fold(roster_get,
 									 To#jid.lserver,
 									 [],
-									 [US]),
+									 [JS]),
 					     case roster_hash(RosterItems) of
 					       RequestedVersion ->
 						   {false, false};
@@ -312,7 +312,7 @@ process_iq_get(From, To, #iq{sub_el = SubEl} = IQ) ->
 							ejabberd_hooks:run_fold(roster_get,
 										To#jid.lserver,
 										[],
-										[US])),
+										[JS])),
 					      false}
 				       end,
 	IQ#iq{type = result,
@@ -336,6 +336,15 @@ process_iq_get(From, To, #iq{sub_el = SubEl} = IQ) ->
 		sub_el = [SubEl, ?ERR_INTERNAL_SERVER_ERROR]}
     end.
 
+get_user_roster(Acc, {JID, LServer}) when is_record(JID, jid) ->
+    Items = get_roster(JID#jid.luser, LServer),
+    lists:filter(fun (#roster{subscription = none,
+			      ask = in}) ->
+			 false;
+		     (_) -> true
+		 end,
+		 Items)
+      ++ Acc;
 get_user_roster(Acc, {LUser, LServer}) ->
     Items = get_roster(LUser, LServer),
     lists:filter(fun (#roster{subscription = none,
@@ -636,6 +645,12 @@ push_item_version(Server, User, From, Item,
 		  end,
 		  ejabberd_sm:get_user_resources(User, Server)).
 
+get_subscription_lists(Acc, JID, Server) when is_record(JID, jid) ->
+    LServer = jlib:nameprep(Server),
+    DBType = gen_mod:db_type(LServer, ?MODULE),
+    Items = get_subscription_lists(Acc, JID#jid.luser, JID#jid.lserver,
+				   DBType),
+    fill_subscription_lists(LServer, Items, [], []);
 get_subscription_lists(Acc, User, Server) ->
     LUser = jlib:nodeprep(User),
     LServer = jlib:nameprep(Server),
