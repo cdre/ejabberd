@@ -168,6 +168,49 @@ process(["mnesia", Arg]) ->
     end,
     ?STATUS_SUCCESS;
 
+%% Tests whether another node is reachable
+process(["cluster_tool", "test_node", Node]) ->
+	print("Testing connection to ~p~n", [Node]),
+	cluster_tool:test_node(Node),
+	?STATUS_SUCCESS;
+
+process(["cluster_tool", "attach_mnesia", Node]) ->
+	print("Clustering Mnesia to ~p~n", [Node]),
+	case cluster_tool:attach_mnesia(Node) of
+		ok ->
+			?STATUS_SUCCESS;
+		{error, Reason} ->
+			print("~s", [Reason])
+	end;
+
+process(["cluster_tool", "attach_node", Node]) ->
+	print("Clustering Mnesia to ~p and restarting Ejabbred~n", [Node]),
+	case cluster_tool:attach_node(Node) of
+		ok ->
+			?STATUS_SUCCESS;
+		{error, Reason} ->
+			print("~s", [Reason]),
+			?STATUS_ERROR
+	end;
+
+process(["cluster_tool", "attach_master", Node]) ->
+	print("Clustering Mnesia to ~p, adding table copies, and restarting Ejabberd~n", [Node]),
+	case cluster_tool:attach_master(Node) of
+		ok ->
+			?STATUS_SUCCESS;
+		{error, Reason} ->
+			print("~s", [Reason]),
+			?STATUS_ERROR
+	end;
+
+process(["cluster_tool" | Args]) ->
+	print("Bad arguments passed for cluster_tool ~p~n", [Args]),
+	print("Usage: ~n", []),
+	print("test_node NODE - test connectivity to NODE~n", []),
+	print("attach_node NODE - cluster mnesia to NODE and restart ejabberd~n", []),
+	print("attach_master NODE - cluster mnesia, add local table copies, and restart ejabberd~n", []),
+	?STATUS_USAGE;
+
 %% The arguments --long and --dual are not documented because they are
 %% automatically selected depending in the number of columns of the shell
 process(["help" | Mode]) ->
@@ -453,7 +496,9 @@ print_usage(HelpMode, MaxC, ShCode) ->
 	 {"stop", [], "Stop ejabberd"},
 	 {"restart", [], "Restart ejabberd"},
 	 {"help", ["[--tags [tag] | com?*]"], "Show help (try: ejabberdctl help help)"},
-	 {"mnesia", ["[info]"], "show information of Mnesia system"}] ++
+	 {"mnesia", ["[info]"], "show information of Mnesia system"},
+	 {"cluster_tool", ["[test_node | attach_node | attach_master]"],
+	  "tool for clustering ejabberd nodes"}] ++
 	get_list_commands() ++
 	get_list_ctls(),
 
@@ -791,4 +836,3 @@ print(Format, Args) ->
 %% Struct(Integer res) create_account(Struct(String user, String server, String password))
 %%format_usage_xmlrpc(ArgsDef, ResultDef) ->
 %%    ["aaaa bbb ccc"].
-
