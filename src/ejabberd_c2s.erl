@@ -351,7 +351,7 @@ get_subscribed(FsmRef) ->
 %%          {stop, Reason, NewStateData}
 %%----------------------------------------------------------------------
 
-wait_for_stream({xmlstreamstart, _Name, Attrs}, StateData) ->
+wait_for_stream({xmlstreamstart, Name, Attrs}, StateData) ->
     DefaultLang = ?MYLANG,
     case xml:get_attr_s(<<"xmlns:stream">>, Attrs) of
 	?NS_STREAM ->
@@ -538,10 +538,18 @@ wait_for_stream({xmlstreamstart, _Name, Attrs}, StateData) ->
 	    {stop, normal, StateData}
 	end;
     _ ->
-	send_header(StateData, ?MYNAME, <<"">>, DefaultLang),
-	send_element(StateData, ?INVALID_NS_ERR),
-	send_trailer(StateData),
-	{stop, normal, StateData}
+			case Name of
+				<<"policy-file-request">> ->
+					?DEBUG("flashpolicy request received.", []),
+					ejabberd_socket:reset_stream(StateData#state.socket),
+					send_text(StateData, flash_policy_string()),
+					{stop, normal, StateData};
+				_ ->
+					send_header(StateData, ?MYNAME, <<"">>, DefaultLang),
+					send_element(StateData, ?INVALID_NS_ERR),
+					send_trailer(StateData),
+					{stop, normal, StateData}
+			end
     end;
 wait_for_stream(timeout, StateData) ->
     {stop, normal, StateData};
@@ -1766,7 +1774,7 @@ print_state(State = #state{pres_t = T, pres_f = F, pres_a = A}) ->
                pres_f = {pres_f, ?SETS:size(F)},
                pres_a = {pres_a, ?SETS:size(A)}
                }.
-    
+
 %%----------------------------------------------------------------------
 %% Func: terminate/3
 %% Purpose: Shutdown the fsm
@@ -1849,7 +1857,7 @@ send_text(StateData, Text) when StateData#state.mgmt_state == pending ->
     ?DEBUG("Cannot send text while waiting for resumption: ~p", [Text]);
 send_text(StateData, Text) when StateData#state.xml_socket ->
     ?DEBUG("Send Text on stream = ~p", [Text]),
-    (StateData#state.sockmod):send_xml(StateData#state.socket, 
+    (StateData#state.sockmod):send_xml(StateData#state.socket,
 				       {xmlstreamraw, Text});
 send_text(StateData, Text) when StateData#state.mgmt_state == active ->
     ?DEBUG("Send XML on stream = ~p", [Text]),
@@ -2494,6 +2502,25 @@ fsm_reply(Reply, wait_for_resume, StateData) ->
     {reply, Reply, wait_for_resume, StateData, Timeout};
 fsm_reply(Reply, StateName, StateData) ->
     {reply, Reply, StateName, StateData, ?C2S_OPEN_TIMEOUT}.
+
+%% @spec () -> string()
+%% @doc Build the content of a Flash policy file.
+%% It specifies as domain "*".
+%% It specifies as to-ports the ports that serve ejabberd_c2s.
+flash_policy_string() ->
+	Listen = ejabberd_config:get_local_option(listen, fun(A) -> A end),
+	ClientPortsDeep = [integer_to_list(Port)
+											|| [{port, Port}, {module, ejabberd_c2s} | _] <- Listen],
+	string:join(ClientPortsDeep, ","),
+	ToPortsString = lists:flatten(ClientPortsDeep),
+	"<?xml version=\"1.0\"?>\n"
+	  "<!DOCTYPE cross-domain-policy SYSTEM "
+	  "\"http://www.macromedia.com/xml/dtds/cross-domain-policy.dtd\">\n"
+	  "<cross-domain-policy>\n"
+	  "  <allow-access-from domain=\"*\" to-ports=\""
+	  ++ ToPortsString ++
+	  "\"/>\n"
+	  "</cross-domain-policy>\n\0".
 
 %% Used by c2s blacklist plugins
 is_ip_blacklisted(undefined, _Lang) -> false;
