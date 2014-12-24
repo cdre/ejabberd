@@ -322,7 +322,7 @@ do_route(OrigFrom, OrigTo, OrigPacket) ->
     ?DEBUG("route~n\tfrom ~p~n\tto ~p~n\tpacket "
 	   "~p~n",
 	   [OrigFrom, OrigTo, OrigPacket]),
-    case ejabberd_hooks:run_fold(filter_packet,
+    case ejabberd_hooks:run_fold(filter_packet, OrigTo#jid.lserver,
 				 {OrigFrom, OrigTo, OrigPacket}, [])
 	of
       {From, To, Packet} ->
@@ -405,4 +405,3 @@ update_tables() ->
       true -> mnesia:delete_table(local_route);
       false -> ok
     end.
-
