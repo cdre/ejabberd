@@ -1515,6 +1515,11 @@ handle_info({route, From, To,
 					     process_presence_probe(From, To,
 								    NewStateData),
 					     {false, Attrs, NewStateData};
+					 <<"rumble-probe-request">> ->
+					    rumble_process_presence_probe(From, To, StateData),
+							{false, Attrs, StateData};
+					 <<"rumble-probe-response">> ->
+					 	 {true, Attrs, StateData};
 					 <<"error">> ->
 					     NewA =
 						 remove_element(jlib:jid_tolower(From),
@@ -2044,6 +2049,32 @@ process_presence_probe(From, To, StateData) ->
 	    end
     end.
 
+rumble_process_presence_probe(From, To, StateData) ->
+	?DEBUG("Rumble Presence Probe ~p, ~p", [From, To]),
+	LFrom = jlib:jid_tolower(From),
+  LBFrom = setelement(3, LFrom, <<"">>),
+  case StateData#state.pres_last of
+			undefined ->
+					ok;
+			_ ->
+				  Timestamp = StateData#state.pres_timestamp,
+					Packet = #xmlel{name = <<"presence">>,
+								          attrs = [{<<"type">>, <<"rumble-probe-response">>}],
+								          children = [#xmlel{name = <<"show">>,
+													                   attrs = [],
+																						 children = []}]},
+				  Pid=element(2, StateData#state.sid),
+				  ejabberd_hooks:run(presence_probe_hook, StateData#state.server, [From, To, Pid]),
+					%% Don't route a presence probe to oneself
+					case From == To of
+						false ->
+							  %% Route
+								ejabberd_router:route(To, From, Packet);
+						true ->
+								ok
+					end
+	end.
+
 %% User updates his presence (non-directed presence packet)
 presence_update(From, Packet, StateData) ->
     #xmlel{attrs = Attrs} = Packet,
@@ -2142,6 +2173,9 @@ presence_track(From, To, Packet, StateData) ->
       <<"probe">> ->
 	  check_privacy_route(From, StateData, From, To, Packet),
 	  StateData;
+		  <<"rumble-probe-request">> ->
+			     rumble_presence_probe(From, StateData, To, Packet),
+					 StateData;
       _ ->
 	  check_privacy_route(From, StateData, From, To, Packet),
 	  A = (?SETS):add_element(LTo, StateData#state.pres_a),
@@ -2163,6 +2197,21 @@ check_privacy_route(From, StateData, FromRoute, To,
 	  ok;
       allow -> ejabberd_router:route(FromRoute, To, Packet)
     end.
+
+rumble_presence_probe(From, StateData, To, Packet) ->
+	case ejabberd_sm:get_user_resources(To#jid.user, To#jid.server) of
+		%% User is not available, send back unavailable stanza
+		[] ->
+				%% Route
+				PU = #xmlel{name = <<"presence">>,
+							attrs = [{<<"type">>, <<"rumble-probe-response">>}],
+							children = []},
+				ejabberd_router:route(To, From, PU);
+		_  ->
+			  check_privacy_route(From, StateData, From, To, Packet)
+	end.
+
+
 
 %% Check if privacy rules allow this delivery
 privacy_check_packet(StateData, From, To, Packet,
