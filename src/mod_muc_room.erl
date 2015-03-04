@@ -69,12 +69,12 @@
 
 %% Module start with or without supervisor:
 -ifdef(NO_TRANSIENT_SUPERVISORS).
--define(SUPERVISOR_START, 
+-define(SUPERVISOR_START,
 	gen_fsm:start(?MODULE, [Host, ServerHost, Access, Room, HistorySize,
 				RoomShaper, Creator, Nick, DefRoomOpts],
 		      ?FSMOPTS)).
 -else.
--define(SUPERVISOR_START, 
+-define(SUPERVISOR_START,
 	Supervisor = gen_mod:get_module_proc(ServerHost, ejabberd_mod_muc_sup),
 	supervisor:start_child(
 	  Supervisor, [Host, ServerHost, Access, Room, HistorySize, RoomShaper,
@@ -137,7 +137,7 @@ init([Host, ServerHost, Access, Room, HistorySize, RoomShaper, Creator, _Nick, D
 	   ejabberd_hooks:run(muc_config_create, ServerHost, [ServerHost, Host]);
        true -> ok
     end,
-    ?INFO_MSG("Created MUC room ~s@~s by ~s", 
+    ?INFO_MSG("Created MUC room ~s@~s by ~s",
 	      [Room, Host, jlib:jid_to_string(Creator)]),
     add_to_log(room_existence, created, State1),
     add_to_log(room_existence, started, State1),
@@ -169,10 +169,14 @@ normal_state({route, From, <<"">>,
 		  Packet},
 	     StateData) ->
     Lang = xml:get_attr_s(<<"xml:lang">>, Attrs),
-    case is_user_online(From, StateData) orelse
-	   is_user_allowed_message_nonparticipant(From, StateData)
+    case {(is_user_online(From, StateData) orelse
+	   is_user_allowed_message_nonparticipant(From, StateData)),
+		 mod_rumble_muc_ban:get_ban_status(From, StateData#state.host)}
 	of
-      true ->
+			{_, true} ->
+				%% Simply drop the message for a Rumble banned player
+				{next_state, normal_state, StateData};
+      {true, _} ->
 	  case xml:get_attr_s(<<"type">>, Attrs) of
 	    <<"groupchat">> ->
 		Activity = get_user_activity(From, StateData),
@@ -1172,7 +1176,7 @@ close_room_if_temporary_and_empty(StateData1) ->
     end.
 
 store_room_history_if_persistent_history(StateData1) ->
-	case (StateData1#state.config)#config.persistent_history andalso 
+	case (StateData1#state.config)#config.persistent_history andalso
 			(StateData1#state.config)#config.persistent of
 		true ->
 			mod_muc:store_room(StateData1#state.server_host,
@@ -1883,8 +1887,16 @@ add_new_user(From, Nick,
 			      Els, From, StateData)
 	      of
 	    true ->
+	  %% Add user as a visitor role if banned in platform
+		IsBanned = mod_rumble_muc_ban:get_ban_status(From, StateData#state.host),
+		?DEBUG("USER ~p IsBanned - ~p", [From, IsBanned]),
+		RumbleRole = if IsBanned == true ->
+											visitor;
+										true ->
+											Role
+								 end,
 		NewState = add_user_presence(From, Packet,
-					     add_online_user(From, Nick, Role,
+					     add_online_user(From, Nick, RumbleRole,
 							     StateData)),
 		if not (NewState#state.config)#config.anonymous ->
 		       WPacket = #xmlel{name = <<"message">>,
@@ -4459,7 +4471,7 @@ check_invitation(From, Els, Lang, StateData) ->
                                    jlib:jid_to_string({StateData#state.room,
                                                        StateData#state.host,
                                                        <<"">>})]),
-				
+
 				case
 				  (StateData#state.config)#config.password_protected
 				    of
@@ -4512,7 +4524,7 @@ handle_roommessage_from_nonparticipant(Packet, Lang,
 
 %% Check in the packet is a decline.
 %% If so, also returns the splitted packet.
-%% This function must be catched, 
+%% This function must be catched,
 %% because it crashes when the packet is not a decline message.
 check_decline_invitation(Packet) ->
     #xmlel{name = <<"message">>} = Packet,
@@ -4540,7 +4552,7 @@ send_decline_invitation({Packet, XEl, DEl, ToJID},
     Packet2 = replace_subelement(Packet, XEl2),
     ejabberd_router:route(RoomJID, ToJID, Packet2).
 
-%% Given an element and a new subelement, 
+%% Given an element and a new subelement,
 %% replace the instance of the subelement in element with the new subelement.
 replace_subelement(#xmlel{name = Name, attrs = Attrs,
 			  children = SubEls},
