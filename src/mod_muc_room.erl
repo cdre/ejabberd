@@ -1887,16 +1887,8 @@ add_new_user(From, Nick,
 			      Els, From, StateData)
 	      of
 	    true ->
-	  %% Add user as a visitor role if banned in platform
-		IsBanned = mod_rumble_muc_ban:get_ban_status(From, StateData#state.host),
-		?DEBUG("USER ~p IsBanned - ~p", [From, IsBanned]),
-		RumbleRole = if IsBanned == true ->
-											visitor;
-										true ->
-											Role
-								 end,
 		NewState = add_user_presence(From, Packet,
-					     add_online_user(From, Nick, RumbleRole,
+					     add_online_user(From, Nick, Role,
 							     StateData)),
 		if not (NewState#state.config)#config.anonymous ->
 		       WPacket = #xmlel{name = <<"message">>,
