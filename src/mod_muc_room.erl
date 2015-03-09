@@ -175,6 +175,10 @@ normal_state({route, From, <<"">>,
 	of
 			{_, true} ->
 				%% Simply drop the message for a Rumble banned player
+				Body = #xmlel{ name = "body", children = [{xmlcdata, <<"Your account has been muted.">>}] },
+				RumbleServerName = #xmlel{ name = "rumble_screenName", children = [{xmlcdata, <<"Server">>}] },
+				BlockedPacket = Packet#xmlel{children = [Body, RumbleServerName]},
+				ejabberd_router:route(StateData#state.jid, From, BlockedPacket),
 				{next_state, normal_state, StateData};
       {true, _} ->
 	  case xml:get_attr_s(<<"type">>, Attrs) of
