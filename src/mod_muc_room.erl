@@ -169,18 +169,29 @@ normal_state({route, From, <<"">>,
 		  Packet},
 	     StateData) ->
     Lang = xml:get_attr_s(<<"xml:lang">>, Attrs),
+		SpamControlEnabled = binary_to_atom(mod_dynamic_config:get_chat_config(From#jid.lserver, "spamControl:enable", <<"true">>), utf8),
     case {(is_user_online(From, StateData) orelse
 	   is_user_allowed_message_nonparticipant(From, StateData)),
-		 mod_rumble_muc_ban:get_ban_status(From, StateData#state.host)}
+		 mod_rumble_muc_ban:get_ban_status(From, StateData#state.host),
+		 mod_rumble_muc_ban:is_temp_ban(From, StateData#state.host) andalso SpamControlEnabled}
 	of
-			{_, true} ->
+			{_, true, _} ->
 				%% Simply drop the message for a Rumble banned player
-				Body = #xmlel{ name = "body", children = [{xmlcdata, <<"Your account has been muted.">>}] },
-				RumbleServerName = #xmlel{ name = "rumble_screenName", children = [{xmlcdata, <<"Server">>}] },
-				BlockedPacket = Packet#xmlel{children = [Body, RumbleServerName]},
-				ejabberd_router:route(StateData#state.jid, From, BlockedPacket),
+				ErrText = <<"You have been permanently suspended from using chat. Please contact Rumble Support for more information.">>,
+				Err = jlib:make_error_reply(Packet,
+																		?ERRT_NOT_ALLOWED(Lang,
+																		ErrText)),
+				ejabberd_router:route(StateData#state.jid, From, Err),
 				{next_state, normal_state, StateData};
-      {true, _} ->
+			{_, _, true} ->
+				%% Simply drop the message for a Rumble banned player
+				ErrText = <<"You have been temporarily suspended from using chat because you exceeded the messaging rate limit. Please try again later.">>,
+				Err = jlib:make_error_reply(Packet,
+																		?ERRT_NOT_ALLOWED(Lang,
+																		ErrText)),
+				ejabberd_router:route(StateData#state.jid, From, Err),
+				{next_state, normal_state, StateData};
+      {true, _, _} ->
 	  case xml:get_attr_s(<<"type">>, Attrs) of
 	    <<"groupchat">> ->
 		Activity = get_user_activity(From, StateData),
@@ -193,11 +204,18 @@ normal_state({route, From, <<"">>,
 		{MessageShaper, MessageShaperInterval} =
 		    shaper:update(Activity#activity.message_shaper, Size),
 		if Activity#activity.message /= undefined ->
-						%% Warn the user that further spamming will be punished
-						Body = #xmlel{ name = "body", children = [{xmlcdata, <<"Messaging rate exceeded...">>}] },
-						RumbleServerName = #xmlel{ name = "rumble_screenName", children = [{xmlcdata, <<"Server">>}] },
-						SlowPacket = Packet#xmlel{children = [Body, RumbleServerName]},
-						ejabberd_router:route(StateData#state.jid, From, SlowPacket),
+			      if SpamControlEnabled ->
+									%% Warn the user that further spamming will be punished
+									mod_rumble_muc_ban:warn_user(From, StateData#state.host),
+									mod_rumble_muc_ban:check_and_ban(From, StateData#state.host),
+									ErrText = <<"You have exceeded the messaging rate limit. Please try again in a few moments.">>;
+							 true ->
+								  ErrText = <<"Traffic rate limit is exceeded">>
+						end,
+						Err = jlib:make_error_reply(Packet,
+																				?ERRT_RESOURCE_CONSTRAINT(Lang,
+																				ErrText)),
+						ejabberd_router:route(StateData#state.jid, From, Err),
 						{next_state, normal_state, StateData};
 		   Now >=
 		     Activity#activity.message_time + MinMessageInterval,
@@ -242,25 +260,26 @@ normal_state({route, From, <<"">>,
 			      {next_state, normal_state, StateData3}
 		       end;
 		   true ->
-				   %% Warn the user that further spamming will be punished
-				   Body = #xmlel{ name = "body", children = [{xmlcdata, <<"Messaging rate exceeded...">>}] },
-				   RumbleServerName = #xmlel{ name = "rumble_screenName", children = [{xmlcdata, <<"Server">>}] },
-				   SlowPacket = Packet#xmlel{children = [Body, RumbleServerName]},
-				   ejabberd_router:route(StateData#state.jid, From, SlowPacket),
-		       %MessageInterval = (Activity#activity.message_time +
-					 %   MinMessageInterval
-					 %   - Now)
-					 %  div 1000,
-		       %Interval = lists:max([MessageInterval,
-					 %    MessageShaperInterval]),
-		       %erlang:send_after(Interval, self(),
-					 %{process_user_message, From}),
-		       %NewActivity = Activity#activity{message = Packet,
-					 %	       message_shaper =
-					 %		   MessageShaper},
-		       %StateData1 = store_user_activity(From, NewActivity,
-					 %	StateData),
-		       {next_state, normal_state, StateData}
+				   if SpamControlEnabled ->
+					 				%% Warn the user that further spamming will be punished
+					 				mod_rumble_muc_ban:warn_user(From, StateData#state.host),
+					 				mod_rumble_muc_ban:check_and_ban(From, StateData#state.host),
+									ErrText = <<"You have exceeded the messaging rate limit. Please try again in a few moments.">>,
+									Err = jlib:make_error_reply(Packet,
+																							?ERRT_RESOURCE_CONSTRAINT(Lang,
+																							ErrText)),
+									ejabberd_router:route(StateData#state.jid, From, Err),
+									{next_state, normal_state, StateData};
+							true ->
+		       				MessageInterval = (Activity#activity.message_time +
+					 													MinMessageInterval- Now) div 1000,
+		              Interval = lists:max([MessageInterval, MessageShaperInterval]),
+		              erlang:send_after(Interval, self(), {process_user_message, From}),
+		              NewActivity = Activity#activity{message = Packet,
+					 	       																message_shaper = MessageShaper},
+		              StateData1 = store_user_activity(From, NewActivity, StateData),
+		              {next_state, normal_state, StateData1}
+						end
 		end;
 	    <<"error">> ->
 		case is_user_online(From, StateData) of
