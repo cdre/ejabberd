@@ -193,12 +193,12 @@ normal_state({route, From, <<"">>,
 		{MessageShaper, MessageShaperInterval} =
 		    shaper:update(Activity#activity.message_shaper, Size),
 		if Activity#activity.message /= undefined ->
-		       ErrText = <<"Traffic rate limit is exceeded">>,
-		       Err = jlib:make_error_reply(Packet,
-						   ?ERRT_RESOURCE_CONSTRAINT(Lang,
-									     ErrText)),
-		       ejabberd_router:route(StateData#state.jid, From, Err),
-		       {next_state, normal_state, StateData};
+						%% Warn the user that further spamming will be punished
+						Body = #xmlel{ name = "body", children = [{xmlcdata, <<"Messaging rate exceeded...">>}] },
+						RumbleServerName = #xmlel{ name = "rumble_screenName", children = [{xmlcdata, <<"Server">>}] },
+						SlowPacket = Packet#xmlel{children = [Body, RumbleServerName]},
+						ejabberd_router:route(StateData#state.jid, From, SlowPacket),
+						{next_state, normal_state, StateData};
 		   Now >=
 		     Activity#activity.message_time + MinMessageInterval,
 		   MessageShaperInterval == 0 ->
@@ -242,20 +242,25 @@ normal_state({route, From, <<"">>,
 			      {next_state, normal_state, StateData3}
 		       end;
 		   true ->
-		       MessageInterval = (Activity#activity.message_time +
-					    MinMessageInterval
-					    - Now)
-					   div 1000,
-		       Interval = lists:max([MessageInterval,
-					     MessageShaperInterval]),
-		       erlang:send_after(Interval, self(),
-					 {process_user_message, From}),
-		       NewActivity = Activity#activity{message = Packet,
-						       message_shaper =
-							   MessageShaper},
-		       StateData1 = store_user_activity(From, NewActivity,
-							StateData),
-		       {next_state, normal_state, StateData1}
+				   %% Warn the user that further spamming will be punished
+				   Body = #xmlel{ name = "body", children = [{xmlcdata, <<"Messaging rate exceeded...">>}] },
+				   RumbleServerName = #xmlel{ name = "rumble_screenName", children = [{xmlcdata, <<"Server">>}] },
+				   SlowPacket = Packet#xmlel{children = [Body, RumbleServerName]},
+				   ejabberd_router:route(StateData#state.jid, From, SlowPacket),
+		       %MessageInterval = (Activity#activity.message_time +
+					 %   MinMessageInterval
+					 %   - Now)
+					 %  div 1000,
+		       %Interval = lists:max([MessageInterval,
+					 %    MessageShaperInterval]),
+		       %erlang:send_after(Interval, self(),
+					 %{process_user_message, From}),
+		       %NewActivity = Activity#activity{message = Packet,
+					 %	       message_shaper =
+					 %		   MessageShaper},
+		       %StateData1 = store_user_activity(From, NewActivity,
+					 %	StateData),
+		       {next_state, normal_state, StateData}
 		end;
 	    <<"error">> ->
 		case is_user_online(From, StateData) of
