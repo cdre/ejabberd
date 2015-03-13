@@ -196,10 +196,11 @@ normal_state({route, From, <<"">>,
 	    <<"groupchat">> ->
 		Activity = get_user_activity(From, StateData),
 		Now = now_to_usec(now()),
-		MinMessageInterval =
-		    trunc(gen_mod:get_module_opt(StateData#state.server_host,
-						 mod_muc, min_message_interval, fun(MMI) when is_number(MMI) -> MMI end, 0)
-                          * 1000000),
+		MinMessageInterval = trunc(binary_to_integer(mod_dynamic_config:get_chat_config(From#jid.lserver, "spamControl:minMessageIntervalMS", <<"400">>)) * 1000),
+		%MinMessageInterval =
+		%    trunc(gen_mod:get_module_opt(StateData#state.server_host,
+  	%					 mod_muc, min_message_interval, fun(MMI) when is_number(MMI) -> MMI end, 0)
+    %                    * 1000000),
 		Size = element_size(Packet),
 		{MessageShaper, MessageShaperInterval} =
 		    shaper:update(Activity#activity.message_shaper, Size),
@@ -1583,11 +1584,12 @@ get_user_activity(JID, StateData) ->
     end.
 
 store_user_activity(JID, UserActivity, StateData) ->
-    MinMessageInterval =
-	gen_mod:get_module_opt(StateData#state.server_host,
-			       mod_muc, min_message_interval,
-                               fun(I) when is_number (I), I>=0 -> I end,
-                               0),
+	  MinMessageInterval = binary_to_integer(mod_dynamic_config:get_chat_config(JID#jid.lserver, "spamControl:minMessageIntervalMS", <<"400">>)) / 1000,
+  % MinMessageInterval =
+	%gen_mod:get_module_opt(StateData#state.server_host,
+	%		       mod_muc, min_message_interval,
+  %                             fun(I) when is_number (I), I>=0 -> I end,
+  %                             0),
     MinPresenceInterval =
 	gen_mod:get_module_opt(StateData#state.server_host,
 			       mod_muc, min_presence_interval,
