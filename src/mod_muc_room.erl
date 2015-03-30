@@ -179,16 +179,14 @@ normal_state({route, From, <<"">>,
 				%% Simply drop the message for a Rumble banned player
 				ErrText = <<"You have been permanently suspended from using chat. Please contact Rumble Support for more information.">>,
 				Err = jlib:make_error_reply(Packet,
-																		?ERRT_NOT_ALLOWED(Lang,
-																		ErrText)),
+																		?ERRT_FORBIDDEN(Lang, ErrText)),
 				ejabberd_router:route(StateData#state.jid, From, Err),
 				{next_state, normal_state, StateData};
 			{_, _, true} ->
 				%% Simply drop the message for a Rumble banned player
 				ErrText = <<"You have been temporarily suspended from using chat because you exceeded the messaging rate limit. Please try again later.">>,
 				Err = jlib:make_error_reply(Packet,
-																		?ERRT_NOT_ALLOWED(Lang,
-																		ErrText)),
+																		?ERRT_NOT_ALLOWED(Lang, ErrText)),
 				ejabberd_router:route(StateData#state.jid, From, Err),
 				{next_state, normal_state, StateData};
       {true, _, _} ->
