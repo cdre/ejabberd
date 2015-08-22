@@ -79,7 +79,6 @@ attach_mnesia(NodeAtom) ->
         io:format("ok.~n", []),
         io:format("Adding node to cluster...", []),
         {ok, _} = mnesia:change_config(extra_db_nodes, [NodeAtom]),
-        {atomic, ok} = mnesia:change_table_copy_type(schema, node(), disc_copies),
         io:format("ok.~n", []),
         io:format("Node attached.~n", []),
         ok
@@ -90,9 +89,14 @@ attach_mnesia(NodeAtom) ->
 
 %% @doc Adds replicated local copies of all tables.
 sync_node() ->
-    [{Tb, mnesia:add_table_copy(Tb, node(), Type)}
-     || {Tb, [{_NodeName, Type}]} <- [{T, mnesia:table_info(T, where_to_commit)}
+    [{Tb, add_table_copy(Tb, Type)}
+     || {Tb, {_NodeName, Type}} <- [{T, lists:last(mnesia:table_info(T, where_to_commit))}
                                      || T <- mnesia:system_info(tables)]].
+
+add_table_copy(Tb, Type) ->
+    io:format("Adding copy of ~p...", [Tb]),
+    mnesia:add_table_copy(Tb, node(), Type),
+    io:format("ok.~n", []).
 
 stop() ->
     io:format("Stopping ejabberd...", []),
