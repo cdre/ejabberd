@@ -55,9 +55,9 @@ attach_master(NodeName) ->
         ok ->
             stop(),
             Ret = attach_mnesia(NodeAtom),
-            io:format("Adding table copies on this node...", []),
+            io:format("Adding table copies on this node...~n", []),
             sync_node(),
-            io:format("ok", []),
+            io:format("Tables copied.~n", []),
             start(),
             Ret;
         error ->
@@ -68,13 +68,20 @@ attach_master(NodeName) ->
 %%      Exported mostly for debugging purposes.
 attach_mnesia(NodeAtom) ->
     try
-        io:format("Erasing schema and copying from ~p...", [NodeAtom]),
+        io:format("Stopping mnesia...", []),
         mnesia:stop(),
+        io:format("ok.~n", []),
+        io:format("Erasing local schema...", []),
         ok = mnesia:delete_schema([node()]),
+        io:format("ok.~n", []),
+        io:format("Starting mnesia...", []),
         mnesia:start(),
+        io:format("ok.~n", []),
+        io:format("Adding node to cluster...", []),
         {ok, _} = mnesia:change_config(extra_db_nodes, [NodeAtom]),
         {atomic, ok} = mnesia:change_table_copy_type(schema, node(), disc_copies),
-        io:format("ok~n", []),
+        io:format("ok.~n", []),
+        io:format("Node attached.~n", []),
         ok
     catch
         Type:Reason ->
@@ -90,9 +97,9 @@ sync_node() ->
 stop() ->
     io:format("Stopping ejabberd...", []),
     application:stop(ejabberd),
-    io:format("stopped~n", []).
+    io:format("stopped.~n", []).
 
 start() ->
     io:format("Starting ejabberd...", []),
     application:start(ejabberd),
-    io:format("started~n", []).
+    io:format("started.~n", []).
