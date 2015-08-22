@@ -55,6 +55,8 @@ attach_master(NodeName) ->
         ok ->
             stop(),
             Ret = attach_mnesia(NodeAtom),
+            io:format("Sleeping 60 seconds for server to be ready...~n", []),
+            timer:sleep(60000),
             io:format("Adding table copies on this node...~n", []),
             sync_node(),
             io:format("Tables copied.~n", []),
