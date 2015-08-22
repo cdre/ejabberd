@@ -94,7 +94,7 @@ sync_node() ->
                                      || T <- mnesia:system_info(tables)]].
 
 add_table_copy(Tb, Type) ->
-    io:format("Adding copy of ~p...", [Tb]),
+    io:format("Adding ~p (~p)...", [Tb, Type]),
     mnesia:add_table_copy(Tb, node(), Type),
     io:format("ok.~n", []).
 
