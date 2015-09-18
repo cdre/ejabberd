@@ -58,7 +58,7 @@ attach_master(NodeName) ->
             io:format("Sleeping 60 seconds for server to be ready...~n", []),
             timer:sleep(60000),
             io:format("Adding table copies on this node...~n", []),
-            sync_node(),
+            sync_node_new(),
             io:format("Tables copied.~n", []),
             start(),
             Ret;
@@ -98,6 +98,38 @@ sync_node() ->
 add_table_copy(Tb, Type) ->
     io:format("Adding ~p (~p)...", [Tb, Type]),
     mnesia:add_table_copy(Tb, node(), Type),
+    io:format("ok.~n", []).
+
+sync_node_new() ->
+    io:format("Copying schema...", []),
+    mnesia:add_table_copy(schema, node(), disc_copies),
+    io:format("ok.~n", []),
+    io:format("Copying muc_history...", []),
+    mnesia:add_table_copy(muc_history, node(), disc_copies),
+    io:format("ok.~n", []),
+    io:format("Copying muc_registered...", []),
+    mnesia:add_table_copy(muc_registered, node(), disc_copies),
+    io:format("ok.~n", []),
+    io:format("Copying muc_room...", []),
+    mnesia:add_table_copy(muc_room, node(), disc_copies),
+    io:format("ok.~n", []),
+    io:format("Copying muc_temp_ban...", []),
+    mnesia:add_table_copy(muc_temp_ban, node(), disc_copies),
+    io:format("ok.~n", []),
+    io:format("Copying muc_warning...", []),
+    mnesia:add_table_copy(muc_warning, node(), disc_copies),
+    io:format("ok.~n", []),
+    io:format("Copying passwd...", []),
+    mnesia:add_table_copy(passwd, node(), disc_copies),
+    io:format("ok.~n", []),
+    io:format("Copying privacy...", []),
+    mnesia:add_table_copy(privacy, node(), disc_copies),
+    io:format("ok.~n", []),
+    io:format("Copying roster...", []),
+    mnesia:add_table_copy(roster, node(), disc_copies),
+    io:format("ok.~n", []),
+    io:format("Copying roster_version...", []),
+    mnesia:add_table_copy(roster_version, node(), disc_copies),
     io:format("ok.~n", []).
 
 stop() ->
