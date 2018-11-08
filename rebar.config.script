@@ -49,15 +49,15 @@ SrcDirs = lists:foldl(
                     Acc
             end, [], Cfg),
 
-Deps = [{p1_cache_tab, ".*", {git, "git://github.com/processone/cache_tab"}},
-        {p1_tls, ".*", {git, "git://github.com/processone/tls"}},
-        {p1_stringprep, ".*", {git, "git://github.com/processone/stringprep"}},
-        {p1_xml, ".*", {git, "git://github.com/processone/xml"}},
-	{esip, ".*", {git, "git://github.com/processone/p1_sip"}},
-	{p1_stun, ".*", {git, "git://github.com/processone/stun"}},
-        {p1_yaml, ".*", {git, "git://github.com/processone/p1_yaml"}},
-        {ehyperloglog, ".*", {git, "https://github.com/vaxelfel/eHyperLogLog.git"}},
-        {p1_utils, ".*", {git, "git://github.com/processone/p1_utils"}}],
+Deps = [{p1_cache_tab, ".*", {git, "git://github.com/processone/cache_tab", "cca096330ce39e8b56fe0e0c478df1ff452e7751"}},
+        {p1_tls, ".*", {git, "git://github.com/processone/tls", "e231cbde546c2e2200f6dae01d13cf743d253c6d"}},
+        {p1_stringprep, ".*", {git, "git://github.com/processone/stringprep", "3c640237a3a7831dc39de6a6d329d3a9af25c579"}},
+        {p1_xml, ".*", {git, "git://github.com/processone/xml", "3db0b2f2b96c9fa2f601f96794cc6e8a480615b4"}},
+	    {esip, ".*", {git, "git://github.com/processone/p1_sip", "a9b725df78ee44c0f118908eef07395654767d62"}},
+	    {p1_stun, ".*", {git, "git://github.com/processone/stun", "d98c71e22492bd5cf95f6a3227de302ace0f70b3"}},
+        {p1_yaml, ".*", {git, "git://github.com/processone/p1_yaml", "e1f081e1bbf34c35fc60c1b988d62a07fbead3e8"}},
+        {ehyperloglog, ".*", {git, "https://github.com/vaxelfel/eHyperLogLog.git", "efd14f262c663cde76d8ed48007826dabe9aca41"}},
+        {p1_utils, ".*", {git, "git://github.com/processone/p1_utils", "1bf99f9c8daed3b03f76e2714ca102c520c88b26"}}],
 
 ConfigureCmd = fun(Pkg, Flags) ->
                        {'get-deps',
@@ -77,7 +77,7 @@ XMLFlags = lists:foldl(
 PostHooks = [ConfigureCmd("p1_tls", ""),
              ConfigureCmd("p1_stringprep", ""),
              ConfigureCmd("p1_yaml", ""),
-	     ConfigureCmd("esip", ""),
+	         ConfigureCmd("esip", ""),
              ConfigureCmd("p1_xml", XMLFlags)],
 
 CfgDeps = lists:flatmap(
